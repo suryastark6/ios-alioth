@@ -12,6 +12,9 @@
 #include "loader.h"
 #include "ufs.h"
 #include "board.h"
+#if HAS_CMD_PANEL
+#include "display.h"
+#endif
 
 #define RESTART_BOOTLOADER	0x77665500U
 
@@ -26,8 +29,6 @@
 #define GICR_ISPENDR0		(GICR_SGI + 0x200)
 #define GICR_ISACTIVER0		(GICR_SGI + 0x300)
 #define GICR_ICFGR1		(GICR_SGI + 0xc04)
-#define VTIMER_INTID		19	/* DT: <GIC_PPI 3 ...>, not the usual 27 */
-#define PTIMER_INTID		18	/* DT: <GIC_PPI 2 ...> */
 #define SGI_INTID		1
 
 #define PSCI_VERSION		0x84000000UL
@@ -371,9 +372,19 @@ void shim_main(uint64_t dtb)
 	struct mmu_info mi;
 
 	/* An xnu payload in the ramdisk means: boot it (MMU stays off). */
+#if HAS_CMD_PANEL
+	/* Before anything is drawn: start sending frames to the command-mode
+	 * panel (autorefresh also covers XNU's console after the handoff). */
+	stage = "display";
+	const char *disp_mode = disp_init();
+#endif
 	stage = "loader";
 	con_clear(RED);
 	con_str("SHIM", "sweet milestone 4: xnu loader");
+#if HAS_CMD_PANEL
+	con_str("BOARD", "alioth (command-mode panel)");
+	disp_report(disp_mode);
+#endif
 	con_skip();
 	const char *why = loader_boot(dtb);
 	con_str("LOADER", why);

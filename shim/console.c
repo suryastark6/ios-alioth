@@ -3,6 +3,13 @@
  * every access is Device memory, so stay aligned (-mstrict-align).
  */
 #include "console.h"
+#include "board.h"
+#if HAS_CMD_PANEL
+#include "display.h"
+#define PRESENT() disp_present()
+#else
+#define PRESENT() do { } while (0)
+#endif
 #include "font.h"
 
 #define SCALE		3
@@ -24,6 +31,7 @@ void con_clear(uint32_t bg)
 	}
 	con_bg = bg;
 	row = 0;
+	PRESENT();
 }
 
 static void put_char(int col, char ch, uint32_t fg)
@@ -71,6 +79,7 @@ void con_str(const char *label, const char *s)
 	put_str(0, label, YELLOW);
 	put_str(LABEL_COLS, s, WHITE);
 	row++;
+	PRESENT();
 }
 
 void con_hex(const char *label, uint64_t v)
@@ -94,4 +103,5 @@ void con_hex2(const char *label, const char *a, uint32_t va, const char *b, uint
 		put_str(col, buf, WHITE);
 	}
 	row++;
+	PRESENT();
 }
