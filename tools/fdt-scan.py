@@ -144,6 +144,18 @@ def main():
     root = parse(open(sys.argv[1], 'rb').read())
     nodes = list(root.walk())
     found = {}
+    phandles = {}
+    for n in nodes:
+        for key in ('phandle', 'linux,phandle'):
+            if len(n.props.get(key, b'')) == 4:
+                phandles[n.u32s(key)[0]] = n
+
+    def ref(cells):
+        """'<node path> + args' for a phandle reference list such as a gpio."""
+        if not cells:
+            return '-'
+        target = phandles.get(cells[0])
+        return f'{target.path if target else hex(cells[0])} {cells[1:]}'
 
     section('Identity')
     print('model:', root.str('model'))
@@ -197,13 +209,29 @@ def main():
                 print(f'  {n.path}: {hx(a)} size {hx(s)}')
                 if 'splash' in nm and 'fb' not in found:
                     found['fb'], found['fb_size'] = a, s
-    for n in nodes:
+    chosen_panel = None
+    if bootargs and 'dsi_display0=' in bootargs:
+        chosen_panel = bootargs.split('dsi_display0=')[1].split(':')[0].split()[0]
+    panels = [n for n in nodes if n.str('qcom,mdss-dsi-panel-type')]
+    if chosen_panel and not any(chosen_panel in (n.name, 'qcom,' + n.name) for n in panels):
+        print(f'  (no panel node named {chosen_panel}; listing all)')
+        chosen_panel = None
+    for n in panels:
+        if chosen_panel and chosen_panel not in (n.name, 'qcom,' + n.name):
+            continue
         t = n.str('qcom,mdss-dsi-panel-type')
-        if t:
-            w = n.u32s('qcom,mdss-dsi-panel-width')
-            h = n.u32s('qcom,mdss-dsi-panel-height')
-            dsc = 'qcom,compression-mode' in n.props or any('dsc' in k for k in n.props)
-            print(f'  panel {n.name}: {t}{" DSC" if dsc else ""} {w[0] if w else "?"}x{h[0] if h else "?"}')
+        sizes, dsc = set(), False
+        for sub in n.walk():
+            w = sub.u32s('qcom,mdss-dsi-panel-width')
+            h = sub.u32s('qcom,mdss-dsi-panel-height')
+            fr = sub.u32s('qcom,mdss-dsi-panel-framerate')
+            if w and h:
+                sizes.add(f'{w[0]}x{h[0]}@{fr[0] if fr else "?"}')
+            dsc |= sub.str('qcom,compression-mode') == 'dsc'
+        print(f'  panel {n.name}: {t}{" DSC" if dsc else ""} {", ".join(sorted(sizes)) or "?"}'
+              f'{"  <- selected by ABL" if chosen_panel else ""}')
+    if not chosen_panel and len(panels) > 1:
+        print(f'  ({len(panels)} panel nodes; the live FDT\'s bootargs name the one in use)')
     print('  dsi_cmd_mode = command-mode panel: needs a refresh kick (see docs/ALIOTH-PLAN.md, M2).')
 
     section('Interrupt controller and timer (step 3)')
@@ -270,16 +298,27 @@ def main():
             print(f'    device reg {n.u32s("reg")} spi-max-frequency {n.u32s("spi-max-frequency")}')
             for k in sorted(n.props):
                 if 'gpio' in k or 'supply' in k or 'irq' in k:
-                    print(f'    {k}: {n.u32s(k)}')
+                    print(f'    {k}: {ref(n.u32s(k))}')
 
     section('Buttons (step 7)')
+    pon_types = {0: 'KPDPWR (power)', 1: 'RESIN', 2: 'CBLPWR', 3: 'KPDPWR+RESIN'}
     for n in nodes:
-        if compat(n, '-pon', 'qcom,pm8941-pwrkey', 'qcom,pm8941-resin', 'gpio-keys') and n.str('status') != 'disabled':
-            print(f'  {n.path}: {", ".join(n.strs("compatible"))} reg {[hx(a) for a, s in n.regs()]}')
-            for c in n.children:
-                code = c.u32s('linux,code')
-                if code:
-                    print(f'    {c.name}: linux,code {code} gpios {c.u32s("gpios")}')
+        if compat(n, '-pon', 'qcom,qpnp-power-on', 'qcom,pm8941-pwrkey', 'qcom,pm8941-resin',
+                  'gpio-keys') and n.str('status') != 'disabled':
+            keys = [c for c in n.children if c.u32s('linux,code')]
+            if not keys:
+                continue
+            # SPMI PMIC nodes have reg = <SID 0>; the PON block's reg is its offset.
+            pmic = n.parent
+            sid = pmic.u32s('reg')[0] if pmic and pmic.u32s('reg') else None
+            print(f'  {n.path}: {", ".join(n.strs("compatible"))} reg {[hx(x) for x in n.u32s("reg")]}'
+                  f'{f" (PMIC SID {sid})" if sid is not None and compat(n, "power-on", "-pon") else ""}')
+            for c in keys:
+                code = c.u32s('linux,code')[0]
+                pt = c.u32s('qcom,pon-type')
+                what = f' pon-type {pon_types.get(pt[0], pt[0])}' if pt else f' gpios {ref(c.u32s("gpios"))}'
+                print(f'    {c.name}: linux,code {code} '
+                      f'({ {114: "VOLUMEDOWN", 115: "VOLUMEUP", 116: "POWER"}.get(code, "?") }){what}')
 
     section('Suggested tools/boards/alioth.py values (check each by hand)')
     for k in ('phys_base', 'mem_size', 'high_phys_base', 'high_mem_size', 'fb', 'fb_size',
