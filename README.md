@@ -4,7 +4,7 @@
 
 This project builds on [ios-sweet](https://github.com/dipa-studio/ios-sweet) by dipa-studio. ios-sweet runs the unmodified iPhone X iOS 16.7.16 userland on the Redmi Note 10 Pro (`sweet`, SM7150) up to the home screen, on Apple's open-source XNU kernel. ios-alioth takes that kernel, boot shim and tooling and adapts the phone-specific layer to alioth.
 
-> **Status: planning / bring-up not started. Nothing has booted on alioth yet.** Don't expect a working image. The plan, the tools to read your phone's hardware, and the board configuration are here, and each milestone is filled in as it boots on real hardware.
+> **Status: bring-up prepared, nothing has booted on alioth yet.** Don't expect a working image. The board configuration is filled in from alioth's device tree source, and the first test images (shim with a command-mode display probe; kernel with alioth key wiring) build. Nothing has been tested on a phone. Each milestone is updated as it boots on real hardware.
 
 ## Plan
 
@@ -12,22 +12,24 @@ The full milestone plan is in [docs/ALIOTH-PLAN.md](docs/ALIOTH-PLAN.md). In sho
 
 | # | Milestone | State |
 | --- | --- | --- |
-| M0 | Back up the phone, read its live device tree, confirm every address | tools ready |
-| M1 | Our shim boots through `fastboot boot` (boot image format, watchdog, return to fastboot) | to do |
-| M2 | Picture and log (framebuffer; command-mode AMOLED panel refresh) | to do |
+| M0 | Back up the phone, read its live device tree, confirm every address | values from source done; needs the phone for RAM size |
+| M1 | Our shim boots through `fastboot boot` (boot image format, watchdog, return to fastboot) | image builds; needs the phone |
+| M2 | Picture and log (framebuffer; command-mode AMOLED panel refresh) | shim autorefresh/kick written; needs the phone |
 | M3 | XNU starts (memory map, GIC, timer) | to do |
 | M4 | All 8 cores (A55 + A77) | to do |
 | M5 | UFS root: launchd and the Apple logo | to do |
 | M6 | Lock screen and home screen | to do |
-| M7 | Touch (SPI) and buttons (PM8150) | to do |
+| M7 | Touch (FT3658U on SPI) and buttons (PM8150) | buttons done (patch 0082); touch to do |
 | M8 | USB live log, battery, display power | to do |
 
-Boot logs and findings go in [NOTES.md](NOTES.md).
+Hardware facts with sources: [docs/ALIOTH-HARDWARE.md](docs/ALIOTH-HARDWARE.md). Boot logs and findings go in [NOTES.md](NOTES.md).
 
 ## What is different from ios-sweet
 
 - `tools/boards/`: per-phone hardware descriptions. `tools/mkadt.py --board alioth` builds the Apple Device Tree from `tools/boards/alioth.py`. It refuses to build while any required value is still unknown. `--board sweet` (the default) produces byte-identical output to upstream.
-- `shim/board.h`: the shim's physical addresses per phone. Build with `BOARD=alioth DTB=path/to/stock.dtb shim/build.sh PAYLOAD`.
+- `shim/board.h`: the shim's physical addresses and timer interrupts per phone. Build with `BOARD=alioth DTB=path/to/stock.dtb shim/build.sh PAYLOAD`.
+- `shim/display.c`: alioth's AMOLED is a command-mode panel, which only shows a new image when the display controller sends a frame. The shim turns on autorefresh before anything is drawn, falls back to one frame per draw, and prints the display state ABL left.
+- `xnu/patches/0082`: the key driver reads the volume-up GPIO from the device tree (alioth: PM8150 GPIO6). Without the node, sweet's wiring is unchanged.
 - `tools/fdt-scan.py`: reads a live device tree and prints everything a port needs, such as memory banks and carve-outs, splash framebuffer, panel mode, GIC, timer, CPUs, UFS, touch bus and buttons. It also suggests values for `tools/boards/alioth.py`.
 - `tools/alioth-backup.sh`: from OrangeFox/TWRP, backs up `persist`, modem partitions, `boot`, `dtbo`, `vbmeta`, `vendor_boot` and pulls the live device tree.
 - `tools/unpack_bootv2.py`: now stops with a clear message on boot header v3/v4 instead of misreading them.
@@ -44,7 +46,7 @@ tools/alioth-backup.sh backup/              # partitions + dtb/alioth-live.dtb
 python3 tools/fdt-scan.py dtb/alioth-live.dtb
 ```
 
-Fill the values into `tools/boards/alioth.py` and `shim/board.h`, check every line marked `VERIFY`, and record the scan in `NOTES.md`. Then continue with M1 in the plan.
+Compare the output with the `SRC` values in `tools/boards/alioth.py` and `shim/board.h`, fill in the RAM bank (`high_phys_base`, `high_mem_size`), and record the scan in `NOTES.md`. Then continue with M1 in the plan.
 
 > Installing iOS (M5) erases Android's `userdata`. Keep your `backup/` folder safe. `persist` and the modem partitions hold calibration data that can't be downloaded anywhere.
 

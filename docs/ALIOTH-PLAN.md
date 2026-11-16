@@ -13,15 +13,16 @@ Rule for every milestone: **change one thing per boot, and write every boot down
 | iOS root image (`mkiosroot.sh`, `sweet-root-tweaks.py`) | iPhone X 16.7.16 | same image | none |
 | Kernel CI (`.github/workflows/xnu.yml`) | `MACHINE_CONFIG=SWEET` | same | none |
 | Generic kernel patches (toolchain, HFS+, AMFI, sandbox, HID, IOSurface, diagnostics) | yes | same | none |
-| GIC | `0x17a00000` / `0x17a60000` | same on SM8250 (verify) | check |
-| UFS host | `ufshc@1d84000` | same on SM8250 (verify) | check |
-| PS_HOLD reset | `0x0c264000` | same on SM8250 (verify) | check |
-| IMEM restart reason | `0x146aa65c` | likely `0x146bf65c` (verify) | small |
-| RAM map | upper bank `0x100000000 + 0xfcc00000` | 6 or 8 GiB, different carve-outs | **must measure** |
-| CPUs | 6x A55 + 2x A76 | 4x A55 + 3x A77 + 1x A77 prime; ARMv8.2, 16K pages OK | small |
-| Framebuffer | `0x9c000000`, video-mode panel | splash region size differs; Samsung AMOLED with DSC, probably **command mode** | **medium-large** |
-| Touch | Goodix GT9896, I²C on GENI SE7, LDO11 via RPMh | on **SPI** (see the postmarketOS alioth notes); chip and rail from the DT | **large** (new driver) |
-| Buttons | PM6150 PON + PM6150L GPIO2 | PM8150 PON + a PM8150-family GPIO | small |
+| GIC | `0x17a00000` / `0x17a60000` | same (source) | done |
+| Timer | virtual INTID 19 | **virtual INTID 27** (source) | done (board.h, ADT) |
+| UFS host | `ufshc@1d84000` | same (source) | done |
+| PS_HOLD reset | `0x0c264000` | same (source) | done |
+| IMEM restart reason | `0x146aa65c` | `0x146bf65c` (source) | done |
+| RAM map | upper bank `0x100000000 + 0xfcc00000` | nothing fixed above 4 GiB (source); bank size from the live FDT | **live FDT** |
+| CPUs | 6x A55 + 2x A76 | 4x A55 + 4x A77, MPIDR `0x000`-`0x700` (source); ARMv8.2, 16K pages OK | done (ADT) |
+| Framebuffer | `0x9c000000`, video-mode panel | `0x9c000000` +`0x2300000`, 1080x2400, DSC **command mode** (source) | shim done, untested |
+| Touch | Goodix GT9896, I²C on GENI SE7, LDO11 via RPMh | FocalTech **FT3658U on SPI** `spi@990000`, PM8150A L10 + L1 (source) | **large** (new driver) |
+| Buttons | PM6150 PON + PM6150L GPIO2 | PM8150 PON (same) + **PM8150 GPIO6** (source) | done (patch 0082), untested |
 | Battery | static IOPMPowerSource | same static stand-in first | none |
 | USB live log (0072-0077, 0081) | DWC3 `0xa600000`, QUSB2 PHY | DWC3 at the same address; different HS PHY | medium |
 | Boot image | header v2 | probably header v3 + `vendor_boot` | **M1 risk** |
@@ -34,8 +35,8 @@ Everything else in `xnu/patches/` runs unchanged.
 | --- | --- | --- |
 | 0010, 0012 | Early framebuffer at `0x9c000000`, 1080 px wide (stride 4320) | Unchanged if the alioth splash is also at `0x9c000000` and 1080 wide; otherwise make the address come from the ADT |
 | 0028-0034 | UFS host driver (address from ADT) | Should work: same Qualcomm UFS v3 host family. 0034 (DMA above 4 GiB) matters with the high bank |
-| 0046, 0056 | CPU copy into the ABL framebuffer | Command-mode panel: add a "kick" after each copy (M2) |
-| 0060 | SPMI keys (PON SID0, PM6150L GPIO2 SID4); touch over GENI I²C | Keys: new PON/GPIO bits for PM8150. Touch: replaced by an SPI driver (M7) |
+| 0046, 0056 | CPU copy into the ABL framebuffer | Command-mode panel: the shim turns on autorefresh before XNU starts, so no kernel change if that works (M2). Otherwise add a kick after each copy |
+| 0060 | SPMI keys (PON SID0, PM6150L GPIO2 SID4); touch over GENI I²C | Keys: **0082** reads the volume-up GPIO from the ADT (`/sweet-keys`); PON is unchanged. Touch: replaced by an SPI driver (M7) |
 | 0062 | RPMh vote for LDO11C (touch rail); battery | New rail name from the DT (M7) |
 | 0063 | Goodix GT9896 protocol | Replaced by alioth's touch IC protocol (M7) |
 | 0065, 0078 | SMP via PSCI, MPIDR order | Check MPIDRs; A77 cores need no changes (M4) |
@@ -53,7 +54,9 @@ Everything else in `xnu/patches/` runs unchanged.
 4. `python3 tools/fdt-scan.py dtb/alioth-live.dtb` prints the memory banks and carve-outs, the splash region, the panel mode, GIC, timer, CPUs, UFS, IMEM, the touch node and its bus, and the buttons.
 5. Get Xiaomi's kernel source for alioth (MiCode `Xiaomi_Kernel_OpenSource`, branch `alioth-*`). It has the touch driver and the panel's DSI command sequences.
 
-**Done when** `fdt-scan.py` output is saved in `NOTES.md` and every `VERIFY` line in `tools/boards/alioth.py` and `shim/board.h` is confirmed or corrected.
+Most values are already filled in from alioth's device tree source ([ALIOTH-HARDWARE.md](ALIOTH-HARDWARE.md), marked `SRC`). The live scan confirms them and adds the RAM banks, which only ABL knows.
+
+**Done when** `fdt-scan.py` output is saved in `NOTES.md`, every `SRC` value in `tools/boards/alioth.py` and `shim/board.h` matches the live tree, and `high_phys_base`/`high_mem_size` are filled in.
 
 ### M1. Own code runs
 
@@ -65,8 +68,8 @@ Everything else in `xnu/patches/` runs unchanged.
 
 ### M2. Picture and log
 
-1. Fill `fb`, `fb_size`, `fb_w`, `fb_h` in `tools/boards/alioth.py` from the splash region.
-2. If the panel is `dsi_cmd_mode` (the ABL `dsi_display0` name ends in `_cmd`), pixels only appear after a frame is triggered. Implement a minimal kick in the shim first: flush and start the DPU control path ABL configured for continuous splash. Use Linux `drivers/gpu/drm/msm/disp/dpu1/dpu_hw_ctl.c` (SM8250 DPU) as the reference. The Pixel 4 port solved this on the very similar SM8150. Move the same kick into the kernel's framebuffer copy (0046/0056) afterwards.
+1. ~~Fill `fb`, `fb_size`, `fb_w`, `fb_h`~~: done from the source tree (`0x9c000000`, 1080x2400).
+2. ~~Command-mode kick~~: done in `shim/display.c`, untested. On boot, the shim finds the CTL driving DSI0 and the tear-check pingpong. It turns on autorefresh (`PP_AUTOREFRESH_CONFIG`) and sends one `CTL_START`, then checks that INTF_1's frame counter keeps moving. If it does not, every console draw sends a frame. The first screen prints the CTL, pingpong, INTF and source-pipe registers, including the splash buffer's address, stride and format. **First thing to check on the phone:** does the text appear, and does the `SSPP` line show `addr=9c000000`, stride `000010e0` (4320)? A stride of 3240 would mean RGB888, and the console would need a 24-bit mode. If autorefresh works, XNU's console needs no change. If not, add the same kick to the kernel's framebuffer copy (0046/0056).
 3. The log: the persistent ring at the end of `userdata` (0047, `tools/sweet-log-pull.sh`) needs no changes beyond the UFS LUN check.
 
 **Done when** shim text is visible on the panel and a kernel log can be pulled from recovery.
@@ -97,10 +100,10 @@ This should need no alioth-specific work: ios-sweet's root tweaks and kernel sta
 
 ### M7. Touch and buttons
 
-1. Read the touch node `fdt-scan.py` found: chip compatible, SPI controller (QUP SE index), chip select, IRQ and reset GPIOs, and supplies.
-2. Write `bsd/dev/alioth_touch.c` on the GENI SPI engine, with the same `sweet_hid_touch(finger, down, x, y)` output as the Goodix driver. Port the chip protocol from Xiaomi's Linux driver.
-3. Power: RPMh vote for the touch rail (reuse `sweet_rpmh.c` from 0062, new resource name).
-4. Buttons: PM8150 PON (power, RESIN = volume down) and the volume-up GPIO, in `sweet_keys.c`.
+1. Known from source: FocalTech FT3658U, `spi@990000` chip select 0 at 6 MHz, IRQ TLMM 39, reset TLMM 33, supplies PM8150A L10 (`vdd`) and L1 (`vcc_i2c`).
+2. Write `bsd/dev/alioth_touch.c` on the GENI SPI engine, with the same `sweet_hid_touch(finger, down, x, y)` output as the Goodix driver. Port the read protocol from Xiaomi's `drivers/input/touchscreen/focaltech_spi/` (`focaltech_spi.c`, `focaltech_core.c`).
+3. Power: RPMh votes for `ldoc10` and `ldoc1` (reuse `sweet_rpmh.c` from 0062).
+4. ~~Buttons~~: done. Power and volume-down use the same PON block as sweet. Volume-up is PM8150 GPIO6, read from the ADT by patch 0082.
 5. Edge touches (0071) with alioth's coordinate range.
 
 **Done when** you can unlock, open Settings and swipe home.
