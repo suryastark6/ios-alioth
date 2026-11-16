@@ -212,6 +212,12 @@ def build(seed=None, qemu=False, highmem=False, board='sweet'):
         ('opposed-power-vol-buttons', u32(1)),
     ])
 
+    # Board key wiring for bsd/dev/sweet_keys.c (patch 0082); absent = sweet.
+    keys = []
+    if b.get('volup_ppid') is not None:
+        keys = [node('sweet-keys', [ph(), ('volup-ppid', u32(b['volup_ppid'])),
+                                    ('volup-base', u32(b['volup_base']))])]
+
     product_props = d22ap_product()
     product = [node('product', [ph()] + product_props)] if product_props else []
 
@@ -233,7 +239,7 @@ def build(seed=None, qemu=False, highmem=False, board='sweet'):
         ('manufacturer', cstr('Apple Inc.')),
         ('#address-cells', u32(2)),
         ('#size-cells', u32(2)),
-    ], [chosen, defaults, cpus, arm_io, fbcon, buttons, pram] + product + ([] if qemu else [ufs]))
+    ], [chosen, defaults, cpus, arm_io, fbcon, buttons, pram] + product + ([] if qemu else [ufs]) + keys)
 
 
 if __name__ == '__main__':

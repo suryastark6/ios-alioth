@@ -1,34 +1,46 @@
 """POCO F3 / Redmi K40 / Mi 11X (alioth, SM8250-AC Snapdragon 870).
 
-STATUS: NOT BOOTED YET. Values marked VERIFY are the SM8250 defaults from the
-upstream Linux sm8250.dtsi and are expected to match, but must be checked
-against YOUR phone's live FDT (/sys/firmware/fdt from recovery) with
+STATUS: NOT BOOTED YET. Values marked SRC come from alioth's own device tree
+source (LineageOS android_kernel_xiaomi_sm8250: kona-v2.1.dtb +
+alioth-sm8250-overlay.dtbo, see docs/ALIOTH-HARDWARE.md). They still need a
+check against YOUR phone's live FDT (/sys/firmware/fdt from recovery):
     python3 tools/fdt-scan.py dtb/alioth-live.dtb
-None = unknown; mkadt.py will not build an alioth ADT until it is filled in.
+None = only the live FDT can tell (ABL fills in the memory node at boot);
+mkadt.py will not build an alioth ADT until it is filled in.
 """
 BOARD = {
     'name': 'alioth',
     'soc': 'qcom,sm8250',
     'compatible': 'xiaomi,alioth',
-    # Low option: unknown until reserved-memory is read from the live FDT.
+    # Low option: none known to be safe. The source has fixed carve-outs up to
+    # 0x9e400000 plus disp_rdump_region at 0xb0400000 (+16M), which overlaps
+    # sweet's low choice of 0xb0000000. Use --highmem.
     'phys_base': None,
     'mem_size': None,
-    # alioth ships with 6 or 8 GiB. Pick the largest range in the memory node
-    # (above 4 GiB, if possible) that no reserved-memory entry overlaps.
+    # Every fixed carve-out is below 4 GiB and every dynamic pool's
+    # alloc-ranges ends at 0xffffffff (SRC), so the bank at 0x100000000 is the
+    # candidate, as on sweet. Its size depends on RAM (6/8 GiB) and comes
+    # from the live memory node, which ABL fills in.
     'high_phys_base': None,
     'high_mem_size': None,
-    'gicd': 0x17a00000, 'gicd_size': 0x10000,     # VERIFY (sm8250 intc@17a00000)
-    'gicr': 0x17a60000, 'gicr_size': 0x100000,    # VERIFY
-    'timebase': 19200000,                          # VERIFY (arm,armv8-timer)
-    'vtimer_intid': 19,                            # VERIFY (GIC_PPI 3 -> INTID 19)
-    # cont_splash / framebuffer reserved region. 0x9c000000 is common on
-    # SM8250 phones; the size depends on the panel. Read it from the FDT.
-    'fb': None, 'fb_size': None,
-    'fb_w': 1080, 'fb_h': 2400,                    # VERIFY (6.67" 1080x2400 AMOLED)
-    'ufs': 0x01d84000, 'ufs_size': 0x3000,        # VERIFY (sm8250 ufshc@1d84000)
+    'gicd': 0x17a00000, 'gicd_size': 0x10000,     # SRC interrupt-controller@17a00000
+    'gicr': 0x17a60000, 'gicr_size': 0x100000,    # SRC
+    'timebase': 19200000,                          # SRC timer clock-frequency
+    # SRC timer interrupts <PPI 13>, <14>, <11>, <12>: virtual = PPI 11 =
+    # INTID 27. NOT sweet's 19 (Qualcomm's SM7150 tree numbers them 1/2/3/0).
+    'vtimer_intid': 27,
+    # SRC cont_splash_region@9c000000; panel k11a_38_08_0a_dsc_cmd is
+    # 1080x2400, 24 bpp, DSC, COMMAND mode (shim/display.c sends the frames).
+    'fb': 0x9c000000, 'fb_size': 0x2300000,
+    'fb_w': 1080, 'fb_h': 2400,
+    'ufs': 0x01d84000, 'ufs_size': 0x3000,        # SRC ufshc@1d84000
     # Kryo 585: cores 0-3 Cortex-A55, 4-6 Cortex-A77, 7 Cortex-A77 prime.
-    # MPIDR regs 0x000..0x700 as on sweet: VERIFY against /cpus/cpu@N reg.
+    # SRC MPIDR regs 0x000..0x700 (cpu@0..cpu@700), as on sweet.
     'cpus': [(c << 8, 'qcom,kryo585', 3187200000 if c == 7 else 2419200000 if c >= 4 else 1804800000)
              for c in range(8)],
+    # SRC gpio-keys vol_up = <&pm8150_gpios 6 GPIO_ACTIVE_LOW>: PM8150 (SID 0)
+    # GPIO6, block 0xc000 + 0x100 * 5. Power and volume-down are on the PON
+    # block at SID 0 0x800 as on sweet. Read by patch 0082 from /sweet-keys.
+    'volup_ppid': 0x0c5, 'volup_base': 0xc500,
     'ecid': 0x414c494f54480001,  # 'ALIOTH' + 1, synthetic (not the phone's)
 }
