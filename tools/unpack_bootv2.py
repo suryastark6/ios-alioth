@@ -5,6 +5,13 @@ src, out = sys.argv[1], sys.argv[2]
 os.makedirs(out, exist_ok=True)
 b = open(src, 'rb').read()
 assert b[:8] == b'ANDROID!'
+(hv,) = struct.unpack_from('<I', b, 40)  # header_version: same offset in v0-v4
+if hv >= 3:
+    # v3/v4 move the DTB into vendor_boot and change the header layout. The
+    # shim's build.sh packs a v2 image; whether ABL accepts that on this
+    # phone is milestone M1 in docs/ALIOTH-PLAN.md.
+    raise SystemExit(f'{src}: boot header v{hv} (not v0-v2). The DTB is in vendor_boot; '
+                     'unpack vendor_boot with mkbootimg\'s unpack_bootimg.py instead.')
 (ks, ka, rs, ra, ss, sa, ta, ps, ver, osv) = struct.unpack_from('<10I', b, 8)
 cmd = b[64:64+512].split(b'\0')[0] + b[608:608+1024].split(b'\0')[0]
 info = dict(kernel_size=ks, kernel_addr=hex(ka), ramdisk_size=rs, ramdisk_addr=hex(ra),
