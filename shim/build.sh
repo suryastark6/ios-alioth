@@ -1,10 +1,20 @@
 #!/bin/bash
 # Build the shim and wrap it in a boot.img v2 that mirrors the stock PixelOS header.
+#   BOARD=sweet|alioth (default sweet) selects the addresses in board.h.
+#   DTB=path (default ../dtb/boot_unpacked/dtb): the phone's stock DTB from
+#   tools/unpack_bootv2.py; ABL needs the DTB it expects for this phone.
 set -euo pipefail
 cd "$(dirname "$0")"
 CC=aarch64-linux-gnu-gcc
 OBJCOPY=aarch64-linux-gnu-objcopy
-CFLAGS="-O2 -ffreestanding -nostdlib -fno-pic -mgeneral-regs-only -mstrict-align -fno-stack-protector -Wall -Wextra"
+BOARD=${BOARD:-sweet}
+DTB=${DTB:-../dtb/boot_unpacked/dtb}
+case "$BOARD" in
+	sweet) BOARD_DEF= ;;
+	alioth) BOARD_DEF=-DBOARD_ALIOTH ;;
+	*) echo "error: unknown BOARD=$BOARD (sweet, alioth)" >&2; exit 1 ;;
+esac
+CFLAGS="$BOARD_DEF -O2 -ffreestanding -nostdlib -fno-pic -mgeneral-regs-only -mstrict-align -fno-stack-protector -Wall -Wextra"
 mkdir -p out
 for f in start.S shim.c console.c mmu.c fdt.c loader.c ufs.c; do
 	$CC $CFLAGS -c $f -o out/${f%.*}.o
@@ -27,7 +37,7 @@ else
 	(cd out && rm -rf rd && mkdir rd && cd rd && find . | cpio -o -H newc --quiet | gzip -9 > ../ramdisk.bin)
 fi
 mkbootimg --header_version 2 --kernel out/Image --ramdisk out/ramdisk.bin \
-	--dtb ../dtb/boot_unpacked/dtb --base 0 --kernel_offset 0x8000 --ramdisk_offset 0x1000000 \
+	--dtb "$DTB" --base 0 --kernel_offset 0x8000 --ramdisk_offset 0x1000000 \
 	--tags_offset 0x100 --dtb_offset 0x1f00000 --pagesize 4096 \
 	--os_version 17.0.0 --os_patch_level 2035-06 \
 	--cmdline "console=null" -o out/shim-boot.img
