@@ -55,8 +55,9 @@ Compare the output with the `SRC` values in `tools/boards/alioth.py` and `shim/b
 Unchanged from ios-sweet (see [docs/SWEET-README.md](docs/SWEET-README.md), sections 1-3), with the board selected:
 
 ```sh
-# kernel: GitHub Actions on your fork
+# kernel: GitHub Actions on your fork (macos-15, Xcode 16; patch 0083 makes xnu-8796 build with it)
 gh workflow run xnu.yml -R YOU/ios-alioth
+gh run download RUN_ID -R YOU/ios-alioth -n xnu-kernel -D xnu/out
 # device tree and boot image
 python3 tools/mkadt.py shim/out/alioth.adt --board alioth --highmem
 python3 tools/mkpayload.py xnu/out/kernel.development.sweet shim/out/alioth.adt shim/out/payload.bin --cmdline '... cpus=1 ...'
