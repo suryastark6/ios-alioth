@@ -34,6 +34,8 @@ env:
 
 jobs:
   build:
+    permissions:
+      contents: write   # publish the kernel to the 'kernel' branch
     # macos-14 (the last image with Xcode 15) was retired on 2026-11-02.
     # macos-15 has Xcode 16 only; its iig emits IORPC.kernelContent, which
     # patch 0083 adds to this xnu (as xnu-11215 has it).
@@ -123,3 +125,28 @@ jobs:
           name: xnu-kernel
           path: out/
           if-no-files-found: warn
+
+      # Artifacts need a GitHub login to download. The newest kernel is also
+      # kept on the 'kernel' branch (one force-pushed commit), so anyone can
+      # fetch it with plain git:
+      #   git fetch --depth 1 origin kernel && git checkout FETCH_HEAD -- kernel.development.sweet
+      - name: Publish to the kernel branch
+        if: success() && github.ref == 'refs/heads/main'
+        env:
+          TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          K=$(ls out/kernel.* 2>/dev/null | grep -v '\.dSYM' | head -1)
+          [ -n "$K" ] || { echo "no kernel to publish"; exit 0; }
+          rm -rf "$RUNNER_TEMP/pub" && mkdir "$RUNNER_TEMP/pub"
+          cp "$K" out/SHA256SUMS "$RUNNER_TEMP/pub/"
+          cd "$RUNNER_TEMP/pub"
+          printf 'source  %s\nrun     %s/%s/actions/runs/%s\nconfig  %s %s, macOS %s xnu\n' \
+            "$GITHUB_SHA" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" \
+            "$MACHINE_CONFIG" "$KERNEL_CONFIG" "$MACOS_VERSION" > BUILD.txt
+          git init -q -b kernel
+          git add -A
+          git -c user.name="${{ github.repository_owner }}" \
+              -c user.email="${{ github.repository_owner_id }}+${{ github.repository_owner }}@users.noreply.github.com" \
+              commit -q -m "Kernel built from ${GITHUB_SHA::7}"
+          git push -q -f "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git" kernel
