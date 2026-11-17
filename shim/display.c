@@ -102,8 +102,31 @@ void disp_present(void)
 	kick();
 }
 
+/*
+ * The console draws at FB_BASE (ABL's cont_splash_region). If exactly one
+ * source pipe fetches a full-screen 1080x2400 buffer with our 4320-byte
+ * stride from somewhere else (ABL's fastboot screen might), draw there.
+ */
+static void follow_scanout(void)
+{
+	uint32_t found = 0, n = 0;
+	for (unsigned i = 0; i < sizeof(sspp_off) / sizeof(sspp_off[0]); i++) {
+		uintptr_t s = MDP_BASE + sspp_off[i];
+		uint32_t addr = rd(s + SSPP_SRC0_ADDR);
+		if (!addr)
+			continue;
+		n++;
+		if (rd(s + SSPP_SRC_SIZE) == ((uint32_t)FB_H << 16 | FB_W) &&
+		    (rd(s + SSPP_SRC_YSTRIDE0) & 0xffff) == FB_STRIDE)
+			found = addr;
+	}
+	if (n == 1 && found && found != (uint32_t)FB_BASE && found >= 0x80000000u)
+		con_fb = (volatile uint32_t *)(uintptr_t)found;
+}
+
 const char *disp_init(void)
 {
+	follow_scanout();
 	for (int i = 0; i < MDP_NUM_CTL && ctl < 0; i++)
 		if (rd(MDP_CTL(i) + CTL_INTF_ACTIVE) & (1U << INTF_DSI0))
 			ctl = i;
@@ -111,7 +134,7 @@ const char *disp_init(void)
 		if (rd(MDP_PP(i) + PP_TEAR_CHECK_EN) & 1)
 			pp = i;
 	if (ctl < 0)
-		return "no CTL drives DSI0: splash path not left on";
+		return "no CTL on DSI0: no splash path";
 
 	/* Without a pingpong in tear-check mode, per-frame kicks are the only way. */
 	if (pp >= 0) {
@@ -186,6 +209,7 @@ void disp_report(const char *mode)
 		con_hex2("SSPP", "size=", rd(s + SSPP_SRC_SIZE), "stride=", rd(s + SSPP_SRC_YSTRIDE0));
 		con_hex2("SSPP", "fmt=", rd(s + SSPP_SRC_FORMAT), "fb?=", addr == (uint32_t)FB_BASE);
 	}
+	con_hex("CONSOLE", (uintptr_t)con_fb);
 }
 
 #else	/* video-mode panel */
