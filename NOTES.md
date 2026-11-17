@@ -21,6 +21,13 @@ Paste the `tools/fdt-scan.py dtb/alioth-live.dtb` output here (remove serial num
 
 ## Build log
 
+### 2026-11-17  refresh fallback, touch driver, kernel branch, QEMU
+- **Kernel fallback for the command-mode panel** (0085): the shim passes `sweetkick=<CTL_START>` when autorefresh did not start (and `sweetfbpa=` when it moved the console). XNU's framebuffer console then kicks after lines (at most every 20 ms) and a thread call kicks at 30 Hz from `EARLY_BOOT`. Host-tested boot-args append.
+- **Touch** (0086): `alioth_touch.c`, FT3658U on QUP0 SE4 GENI SPI; rails L1C 1.8 V and L10C 3.2 V through `sweet_rpmh.c` (alioth allowlist, cmd-db from the ADT). Host tests: protocol against a simulated IC (chip id, two fingers with sub-pixel decoding, lift, CRC error, busy status, out of range) and the FIFO engine against a GENI register model (1-71 byte reads, 16- and 4-word FIFOs). CI: compiles, only the style warnings sweet's files also have.
+- **CI publishes the kernel** to the `kernel` branch (run 44033252467 onwards).
+- **QEMU** with the alioth ADT and the CI kernel: stopped after "ATM subsystem is initialized" while sweet's ADT got further. Bisecting the ADT showed the cause: the boot CPU driver matches `qcom,kryo470`, and alioth's ADT said `qcom,kryo585`. Fixed in `tools/boards/alioth.py`; now identical progress to sweet (`skmem_region_init`, as far as QEMU gets).
+- Images for the phone: `out/alioth-m1-v3.img`, `out/alioth-m3-v3.img` (kernel `aebaed8`).
+
 ### 2026-11-17  pre-flight review before the first session on the phone
 Problems found by reading the code and sources, and fixed before any boot:
 - **Boot image format.** alioth is Virtual A/B with `vendor_boot` (header v3). A v3 image puts the vendor ramdisk *before* ours, so the payload was no longer at `initrd-start`. The loader now searches for it and realigns it. `HEADER=3` builds a v3 image; `unpack_vendor_boot.py` gets the stock DTB for v2. Host-tested with payloads at offsets 0, 8, 13, 4096, 12345 and 1000003.

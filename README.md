@@ -14,12 +14,12 @@ The full milestone plan is in [docs/ALIOTH-PLAN.md](docs/ALIOTH-PLAN.md). In sho
 | --- | --- | --- |
 | M0 | Back up the phone, read its live device tree, confirm every address | values from source done; needs the phone for RAM size |
 | M1 | Our shim boots through `fastboot boot` (boot image format, watchdog, return to fastboot) | image builds; needs the phone |
-| M2 | Picture and log (framebuffer; command-mode AMOLED panel refresh) | shim autorefresh/kick written; needs the phone |
-| M3 | XNU starts (memory map, GIC, timer) | to do |
+| M2 | Picture and log (framebuffer; command-mode AMOLED panel refresh) | shim autorefresh/kick and kernel fallback (0085) written; needs the phone |
+| M3 | XNU starts (memory map, GIC, timer) | image ready; boots in QEMU with the alioth ADT; needs the phone |
 | M4 | All 8 cores (A55 + A77) | to do |
 | M5 | UFS root: launchd and the Apple logo | to do |
 | M6 | Lock screen and home screen | to do |
-| M7 | Touch (FT3658U on SPI) and buttons (PM8150) | buttons done (patch 0082); touch to do |
+| M7 | Touch (FT3658U on SPI) and buttons (PM8150) | buttons (0082) and touch driver (0086) written; need the phone |
 | M8 | USB live log, battery, display power | to do |
 
 Hardware facts with sources: [docs/ALIOTH-HARDWARE.md](docs/ALIOTH-HARDWARE.md). Boot logs and findings go in [NOTES.md](NOTES.md).
@@ -34,6 +34,9 @@ Hardware facts with sources: [docs/ALIOTH-HARDWARE.md](docs/ALIOTH-HARDWARE.md).
 - `tools/alioth-backup.sh`: from OrangeFox/TWRP, backs up `persist`, modem partitions, `boot`, `dtbo`, `vbmeta`, `vendor_boot` and pulls the live device tree.
 - `tools/unpack_bootv2.py`: now stops with a clear message on boot header v3/v4 instead of misreading them. `tools/unpack_vendor_boot.py` extracts the stock DTB from alioth's `vendor_boot`.
 - `tools/build-alioth.sh m1|m3|m5 [KERNEL]`: one command per milestone test image, boot header v3 (default) or v2.
+- `xnu/patches/0085`: when the panel's autorefresh does not start, XNU sends the frames itself (`sweetkick=`, passed by the shim).
+- `xnu/patches/0086`: FocalTech FT3658U touch driver over GENI SPI, with RPMh votes for its two rails.
+- Kernel builds: every successful CI run publishes the kernel to the `kernel` branch, so it can be fetched without a GitHub login.
 - `xnu/patches/0084`: on alioth, sweet's touch driver (which would power sweet's touch rail, a different regulator here) and USB driver (sweet's PHY) stay off; `userdata` is found on any UFS LUN.
 
 The kernel patches, iOS root image tooling and diagnostics are unchanged from ios-sweet so far. The original documentation is in [docs/SWEET-README.md](docs/SWEET-README.md), and the full upstream engineering log is the [ios-sweet NOTES.md](https://github.com/dipa-studio/ios-sweet/blob/main/NOTES.md).

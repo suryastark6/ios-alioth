@@ -71,7 +71,7 @@ Step by step for Windows: [FIRST-BOOT.md](FIRST-BOOT.md). Images: `tools/build-a
 ### M2. Picture and log
 
 1. ~~Fill `fb`, `fb_size`, `fb_w`, `fb_h`~~: done from the source tree (`0x9c000000`, 1080x2400).
-2. ~~Command-mode kick~~: done in `shim/display.c`, untested. On boot, the shim finds the CTL driving DSI0 and the tear-check pingpong. It turns on autorefresh (`PP_AUTOREFRESH_CONFIG`) and sends one `CTL_START`, then checks that INTF_1's frame counter keeps moving. If it does not, every console draw sends a frame. The first screen prints the CTL, pingpong, INTF and source-pipe registers, including the splash buffer's address, stride and format. **First thing to check on the phone:** does the text appear, and does the `SSPP` line show `addr=9c000000`, stride `000010e0` (4320)? A stride of 3240 would mean RGB888, and the console would need a 24-bit mode. If autorefresh works, XNU's console needs no change. If not, add the same kick to the kernel's framebuffer copy (0046/0056).
+2. ~~Command-mode kick~~: done in `shim/display.c`, untested. On boot, the shim finds the CTL driving DSI0 and the tear-check pingpong. It turns on autorefresh (`PP_AUTOREFRESH_CONFIG`) and sends one `CTL_START`, then checks that INTF_1's frame counter keeps moving. If it does not, every console draw sends a frame. The first screen prints the CTL, pingpong, INTF and source-pipe registers, including the splash buffer's address, stride and format. **First thing to check on the phone:** does the text appear, and does the `SSPP` line show `addr=9c000000`, stride `000010e0` (4320)? A stride of 3240 would mean RGB888, and the console would need a 24-bit mode. If autorefresh works, XNU's console needs no change. If not, the shim passes `sweetkick=<CTL_START address>` and patch 0085 sends frames from XNU: after console lines (so panics show) and 30 times a second from `EARLY_BOOT` on.
 3. The log: the persistent ring at the end of `userdata` (0047, `tools/sweet-log-pull.sh`) needs no changes beyond the UFS LUN check.
 
 **Done when** shim text is visible on the panel and a kernel log can be pulled from recovery.
@@ -80,7 +80,8 @@ Step by step for Windows: [FIRST-BOOT.md](FIRST-BOOT.md). Images: `tools/build-a
 
 1. RAM: 3 GiB at `0x100000000` is already set. The shim checks it against the live memory and reserved-memory nodes and refuses to boot XNU if it doesn't fit, printing the conflicting region.
 2. `tools/build-alioth.sh m3 path/to/kernel.development.sweet` builds the ADT, payload and boot image in one step, with `cpus=1` (`--cpus 8` for M4).
-3. The CI kernel contains 0082 (keys) and 0084 (sweet touch/USB off on alioth). 0010/0012's framebuffer address (`0x9c000000`, 1080 wide) matches alioth's splash buffer.
+3. The CI kernel contains 0082 (keys) and 0084 (sweet touch/USB off on alioth). 0010/0012's framebuffer address (`0x9c000000`, 1080 wide) matches alioth's splash buffer. Every successful CI run publishes the kernel to the `kernel` branch (`git fetch --depth 1 origin kernel`).
+4. Checked in QEMU (`tools/qemu-sweet.py`, QEMU's GIC and timer, everything else alioth): with the alioth ADT the CI kernel reaches the same point as sweet's (`skmem_region_init`). This found that the CPU node must keep `qcom,kryo470`, the kernel's match key; with `qcom,kryo585` boot stopped after "ATM subsystem is initialized".
 
 **Done when** the kernel log reaches "waiting for root device" (or further).
 
@@ -103,8 +104,8 @@ This should need no alioth-specific work: ios-sweet's root tweaks and kernel sta
 ### M7. Touch and buttons
 
 1. Known from source: FocalTech FT3658U, `spi@990000` chip select 0 at 6 MHz, IRQ TLMM 39, reset TLMM 33, supplies PM8150A L10 (`vdd`) and L1 (`vcc_i2c`).
-2. Write `bsd/dev/alioth_touch.c` on the GENI SPI engine, with the same `sweet_hid_touch(finger, down, x, y)` output as the Goodix driver. Port the read protocol from Xiaomi's `drivers/input/touchscreen/focaltech_spi/` (`focaltech_spi.c`, `focaltech_core.c`).
-3. Power: RPMh votes for `ldoc10` and `ldoc1` (reuse `sweet_rpmh.c` from 0062).
+2. ~~Driver~~: written, untested on the phone (patch 0086, `bsd/dev/alioth_touch.c`). GENI SPI in FIFO mode, Xiaomi's power-on order and SPI protocol with CRC-16, chip-id check 56:52, 1/8-pixel coordinates scaled to 1080x2400. The protocol and transfer engine were host-tested against a simulated FT3658U and a register-level GENI FIFO model. Expected log on the phone: `ALIOTH TOUCH: chip id err=0/0 56:52`, then `FT3658U ready`.
+3. ~~Power~~: done. `sweet_rpmh.c` votes `ldoc1` (1.8 V) and `ldoc10` (3.2 V) on alioth only, with the command database address from the ADT (`/sweet-rpmh`).
 4. ~~Buttons~~: done. Power and volume-down use the same PON block as sweet. Volume-up is PM8150 GPIO6, read from the ADT by patch 0082.
 5. Edge touches (0071) with alioth's coordinate range.
 

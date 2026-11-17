@@ -53,10 +53,10 @@ adb reboot bootloader
 
 ## 3. First boot of our code (M1, M2)
 
-The test image is `Desktop\alioth\out\shim-alioth-m1-v3.img`. It contains no iOS and no XNU. It only shows what it finds and tests the display.
+The test image is `Desktop\alioth\out\alioth-m1-v3.img`. It contains no iOS and no XNU. It only shows what it finds and tests the display.
 
 ```bat
-fastboot boot ..\out\shim-alioth-m1-v3.img
+fastboot boot ..\out\alioth-m1-v3.img
 ```
 
 **What should happen:** within a few seconds the screen turns red with white text, about 20 lines: `SHIM`, `BOARD alioth`, `DISP ...`, `CTL ...`, `PP ...`, `SSPP ...`, `LOADER no SWEETXNU payload`, then `UFS ...` lines (a read-only test of the storage). About 3 minutes later the phone **restarts into fastboot by itself**.
@@ -74,7 +74,26 @@ What other outcomes mean:
 
 Nothing is written to the phone in any of these cases.
 
-## 4. Back to Android
+## 4. Optional: start XNU (M3)
+
+Only if step 3 showed the red screen with text. `Desktop\alioth\out\alioth-m3-v3.img` is the same shim with the XNU kernel (from the `kernel` branch, see `out\BUILD.txt`), one CPU, and no root file system.
+
+```bat
+fastboot boot ..\out\alioth-m3-v3.img
+```
+
+**What should happen:** the red shim screen, now with `RAM ok: in a memory bank, not reserved`, then the screen fills with white-on-black kernel log text that keeps scrolling. Success is the log ending in `waiting for root device` (there is no iOS on the phone yet). Take a photo every ~20 seconds, and one of the last screen.
+
+| You see | Meaning |
+| --- | --- |
+| `RAM NOT inside a /memory bank` or `RSVD ...` and it stops | the 3 GiB RAM range does not fit this phone: photo, I adjust it |
+| `KICK ...` line on the red screen | autorefresh did not work, the kernel sends frames itself (expected to still show the log) |
+| red screen, then nothing changes for 2+ minutes | XNU started but its console is not visible, or it hung early: hold Power + Volume Down |
+| a panic text | photo of the whole screen |
+
+Then Power + Volume Down to get back to fastboot.
+
+## 5. Back to Android
 
 ```bat
 fastboot reboot
@@ -82,4 +101,4 @@ fastboot reboot
 
 ## After tonight
 
-With the photos and `dtb\`, I check the display and RAM values. Then I build the next image: the XNU kernel (from GitHub Actions) with the alioth device tree, for M3 ("XNU starts"). The kernel artifact can't be downloaded from my workspace, so you'll download `xnu-kernel` from the latest successful run under **Actions** on GitHub into `Desktop\alioth\`.
+With the photos and `dtb\`, I check the display and RAM values and build the next images. New kernels are published to the repository's `kernel` branch by every successful CI run, so nothing needs to be downloaded by hand.
