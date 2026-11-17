@@ -11,6 +11,11 @@
 
 $ErrorActionPreference = 'Continue'
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
+# ios-alioth and out next to the script, or one folder further down.
+if (-not (Test-Path (Join-Path $Root 'ios-alioth'))) {
+    $sub = Get-ChildItem -Path $Root -Directory | Where-Object { Test-Path (Join-Path $_.FullName 'ios-alioth') } | Select-Object -First 1
+    if ($sub) { $Root = $sub.FullName }
+}
 $Repo = Join-Path $Root 'ios-alioth'
 $Out = Join-Path $Root 'out'
 $Logs = Join-Path $Root 'logs'
