@@ -37,7 +37,8 @@
 #define CTL_INTF_ACTIVE		0x0f4
 #define PP_TEAR_CHECK_EN	0x000
 #define PP_SYNC_CONFIG_VSYNC	0x004
-#define PP_LINE_COUNT		0x02c
+#define PP_INT_COUNT_VAL	0x014	/* [31:16] TE (read pointer) frame count */
+#define PP_LINE_COUNT		0x02c	/* write pointer: line of the frame being sent */
 #define PP_AUTOREFRESH_CONFIG	0x030
 #define INTF_FRAME_COUNT	0x0ac
 #define INTF_STATUS		0x26c
@@ -122,13 +123,38 @@ const char *disp_init(void)
 	if (pp < 0)
 		return "kick mode (no tear-check pingpong)";
 
-	/* Autorefresh works if INTF_1 keeps sending frames with no further kicks. */
+		/*
+	 * Autorefresh works if frames keep going out with no further kicks: the
+	 * write pointer line count cycles through each frame (the Xiaomi driver
+	 * reads it the same way to tell whether a transfer is in progress).
+	 * INTF_1's frame counter is a video-mode timing engine counter and need
+	 * not move for a command-mode panel, so it is only reported.
+	 */
 	wait_ms(50);
-	uint32_t f0 = rd(MDP_INTF(INTF_DSI0) + INTF_FRAME_COUNT);
-	wait_ms(200);
-	uint32_t f1 = rd(MDP_INTF(INTF_DSI0) + INTF_FRAME_COUNT);
-	autorefresh = f1 != f0;
-	return autorefresh ? "autorefresh on" : "kick mode (frame count did not move)";
+	uint32_t first = rd(MDP_PP(pp) + PP_LINE_COUNT) & 0xffff, changes = 0;
+	uint32_t te0 = rd(MDP_PP(pp) + PP_INT_COUNT_VAL) >> 16;
+	for (int i = 0; i < 400; i++) {		/* 400 samples over ~200 ms */
+		uint64_t next = ticks() + ticks_per_ms() / 2;
+		while (ticks() < next)
+			;
+		uint32_t now = rd(MDP_PP(pp) + PP_LINE_COUNT) & 0xffff;
+		if (now != first) {
+			changes++;
+			first = now;
+		}
+	}
+	uint32_t te1 = rd(MDP_PP(pp) + PP_INT_COUNT_VAL) >> 16;
+	autorefresh = changes >= 4;
+	if (autorefresh)
+		return "autorefresh on";
+	/*
+	 * Not sending by itself: switch autorefresh back off (the Xiaomi driver
+	 * never kicks while it is on) and send a frame per draw instead.
+	 */
+	wr(MDP_PP(pp) + PP_AUTOREFRESH_CONFIG, 0);
+	wait_ms(20);
+	kick();
+	return te1 != te0 ? "kick mode (TE ok, autorefresh idle)" : "kick mode (no TE seen)";
 }
 
 /* Report what ABL left, so the first boot answers the M2 questions. */
@@ -145,7 +171,7 @@ void disp_report(const char *mode)
 	if (pp >= 0) {
 		uintptr_t p = MDP_PP(pp);
 		con_hex2("PP", "vsync=", rd(p + PP_SYNC_CONFIG_VSYNC), "autoref=", rd(p + PP_AUTOREFRESH_CONFIG));
-		con_hex("PP line", rd(p + PP_LINE_COUNT));
+		con_hex2("PP", "te/line=", rd(p + PP_INT_COUNT_VAL), "wrline=", rd(p + PP_LINE_COUNT));
 	}
 	con_hex2("INTF1", "frames=", rd(MDP_INTF(INTF_DSI0) + INTF_FRAME_COUNT),
 		 "status=", rd(MDP_INTF(INTF_DSI0) + INTF_STATUS));
