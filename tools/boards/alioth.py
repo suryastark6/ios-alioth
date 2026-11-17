@@ -38,7 +38,12 @@ BOARD = {
     'ufs': 0x01d84000, 'ufs_size': 0x3000,        # SRC ufshc@1d84000
     # Kryo 585: cores 0-3 Cortex-A55, 4-6 Cortex-A77, 7 Cortex-A77 prime.
     # SRC MPIDR regs 0x000..0x700 (cpu@0..cpu@700), as on sweet.
-    'cpus': [(c << 8, 'qcom,kryo585', 3187200000 if c == 7 else 2419200000 if c >= 4 else 1804800000)
+    # The compatible stays 'qcom,kryo470': it is the IONameMatch key of the
+    # kernel's boot CPU driver and AppleKeyStore stand-in (patches 0018,
+    # 0038), not a description of the core. With 'qcom,kryo585' the CPU
+    # driver never attaches and boot stops after "ATM subsystem is
+    # initialized" (found in QEMU, tools/qemu-sweet.py).
+    'cpus': [(c << 8, 'qcom,kryo470', 3187200000 if c == 7 else 2419200000 if c >= 4 else 1804800000)
              for c in range(8)],
     # SRC gpio-keys vol_up = <&pm8150_gpios 6 GPIO_ACTIVE_LOW>: PM8150 (SID 0)
     # GPIO6, block 0xc000 + 0x100 * 5. Power and volume-down are on the PON
