@@ -4,6 +4,8 @@ Milestones M0 to M2 from [ALIOTH-PLAN.md](ALIOTH-PLAN.md): back up the phone, re
 
 Time: about 30-45 minutes.
 
+**Easiest way:** copy `tools\windows\alioth-session.bat` and `alioth-session.ps1` next to the `ios-alioth` and `out` folders and double-click the `.bat`. It finds adb, fastboot and Python, updates the repository if git is installed, and offers every step below as a menu item: check the phone, boot OrangeFox, backup and scan, M1 and M3 tests, back to Android. Everything it shows is also saved to `logs\session-<time>.txt`, so the results can be read later without copying text from the window. The manual commands below do the same.
+
 ## What you need
 
 - **An unlocked bootloader.** Check it in step 1. If it is still locked, Xiaomi's Mi Unlock tool makes you wait (often 7 days), so nothing else here can be done tonight.
