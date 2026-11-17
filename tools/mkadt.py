@@ -217,6 +217,9 @@ def build(seed=None, qemu=False, highmem=False, board='sweet'):
     if b.get('volup_ppid') is not None:
         keys = [node('sweet-keys', [ph(), ('volup-ppid', u32(b['volup_ppid'])),
                                     ('volup-base', u32(b['volup_base']))])]
+    # RPMh command database for sweet_rpmh.c (patch 0086); absent = sweet.
+    if b.get('rpmh_cmd_db') is not None:
+        keys.append(node('sweet-rpmh', [ph(), ('cmd-db', u32(*b['rpmh_cmd_db']))]))
 
     product_props = d22ap_product()
     product = [node('product', [ph()] + product_props)] if product_props else []

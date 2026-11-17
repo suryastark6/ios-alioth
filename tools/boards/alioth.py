@@ -44,5 +44,8 @@ BOARD = {
     # GPIO6, block 0xc000 + 0x100 * 5. Power and volume-down are on the PON
     # block at SID 0 0x800 as on sweet. Read by patch 0082 from /sweet-keys.
     'volup_ppid': 0x0c5, 'volup_base': 0xc500,
+    # SRC reserved-memory@80860000 (qcom,cmd-db): RPMh command database,
+    # read by sweet_rpmh.c (patch 0086) to vote the touch rails.
+    'rpmh_cmd_db': (0x80860000, 0x20000),
     'ecid': 0x414c494f54480001,  # 'ALIOTH' + 1, synthetic (not the phone's)
 }

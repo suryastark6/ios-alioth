@@ -1,0 +1,731 @@
+--- a/bsd/conf/files
++++ b/bsd/conf/files
+@@ -108,6 +108,7 @@
+ bsd/dev/sweet_sample.c			standard
+ bsd/dev/sweet_keys.c			standard
+ bsd/dev/sweet_touch.c			standard
++bsd/dev/alioth_touch.c			standard
+ bsd/dev/sweet_rpmh.c			standard
+ bsd/dev/sweet_spmi.c			standard
+ bsd/dev/sweet_usb.c			standard
+--- a/bsd/dev/sweet_rpmh.c
++++ b/bsd/dev/sweet_rpmh.c
+@@ -9,9 +9,11 @@
+ #include <sys/errno.h>
+ #include <kern/clock.h>
+ #include <machine/machine_routines.h>
++#include <pexpert/device_tree.h>
+ 
+ extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
+ int sweet_rpmh_vreg_enable(const char *res, unsigned mv);
++extern bool sweet_board_is(const char *want);
+ 
+ /* Live downstream DT has two positional reg entries, no reg-names. */
+ #define RH_RSC_PA       0x18220000u
+@@ -132,6 +134,20 @@
+ 		uint32_t pa = rh_read(rh_dict, 0);
+ 		uint32_t size = rh_read(rh_dict, 4);
+ 		printf("SWEET RPMH: cmd-db locator=%#x pa=%#x size=%#x\n", RH_DICT_PA, pa, size);
++		/*
++		 * Boards whose device tree gives cmd-db as a reserved-memory region
++		 * (alioth: reserved-memory@80860000, qcom,cmd-db) pass it in the
++		 * ADT as /sweet-rpmh cmd-db = <pa size>; it wins over the locator.
++		 */
++		DTEntry node;
++		void const *prop;
++		unsigned int psize;
++		if (SecureDTLookupEntry(NULL, "/sweet-rpmh", &node) == kSuccess &&
++		    SecureDTGetProperty(node, "cmd-db", &prop, &psize) == kSuccess && psize == 8) {
++			pa = ((const uint32_t *)prop)[0];
++			size = ((const uint32_t *)prop)[1];
++			printf("SWEET RPMH: cmd-db from ADT pa=%#x size=%#x\n", pa, size);
++		}
+ 		/* Firmware supplies the reserved RAM address; never scan physical RAM. */
+ 		if (pa < 0x80000000u || (pa & 3u) || (size & 3u) ||
+ 		    size < RH_DB_HEADER || size > RH_DB_MAX ||
+@@ -234,7 +250,7 @@
+ 		for (unsigned c = 0; c < rh_ncpt; ++c) {
+ 			if ((enabled & (1u << c)) &&
+ 			    (rh_read(rh_tcs, b + RH_ADDR + c * RH_CMD_STRIDE) & ~15u) == address) {
+-				printf("SWEET RPMH: conflicting inherited L11C request in TCS%u\n", t);
++				printf("SWEET RPMH: conflicting inherited request for %#x in TCS%u\n", address, t);
+ 				return EBUSY;
+ 			}
+ 		}
+@@ -320,16 +336,27 @@
+ 		return EIO;
+ 	}
+ 	rh_poisoned = false;
+-	printf("SWEET RPMH: L11C ACTIVE vote complete (rail voltage requires hardware verification)\n");
++	printf("SWEET RPMH: %#x ACTIVE vote complete (rail voltage requires hardware verification)\n", address);
+ 	return 0;
+ }
+ 
+ int
+ sweet_rpmh_vreg_enable(const char *res, unsigned mv)
+ {
+-	/* Board-specific helper: do not apply PMIC5-LDO policy to arbitrary resources. */
+-	if (!res || strcmp(res, "ldoc11") || mv < 2950 || mv > 3400) {
+-		printf("SWEET RPMH: expected ldoc11 and 2950..3400 mV\n");
++	/*
++	 * Board-specific helper: do not apply PMIC5-LDO policy to arbitrary
++	 * resources. sweet: the touch rail L11C. alioth: the FT3658U's
++	 * vcc_i2c (PM8150A L1, fixed 1.8 V) and vdd (PM8150A L10, 3.0-3.3 V).
++	 */
++	bool ok;
++	if (sweet_board_is("xiaomi,alioth")) {
++		ok = res && ((!strcmp(res, "ldoc1") && mv >= 1700 && mv <= 1950) ||
++		    (!strcmp(res, "ldoc10") && mv >= 2950 && mv <= 3400));
++	} else {
++		ok = res && !strcmp(res, "ldoc11") && mv >= 2950 && mv <= 3400;
++	}
++	if (!ok) {
++		printf("SWEET RPMH: %s %u mV is not an allowed rail for this board\n", res ? res : "(null)", mv);
+ 		return EINVAL;
+ 	}
+ 	if (__atomic_exchange_n(&rh_lock, 1, __ATOMIC_ACQUIRE)) {
+--- a/bsd/dev/sweet_ufs.c
++++ b/bsd/dev/sweet_ufs.c
+@@ -587,7 +587,10 @@
+  * Board check: the ADT root "compatible" lists xiaomi,alioth on the POCO F3
+  * (tools/boards/alioth.py). sweet-only drivers must not run there.
+  */
+-static bool
++bool sweet_board_is(const char *want);
++void alioth_touch_init(void);
++
++bool
+ sweet_board_is(const char *want)
+ {
+ 	DTEntry root;
+@@ -710,6 +713,7 @@
+ 		 * does not have. Neither may run here.
+ 		 */
+ 		printf("SWEET: alioth: sweet touch and USB drivers not started\n");
++		alioth_touch_init();    /* FT3658U on GENI SPI (alioth_touch.c) */
+ 	} else {
+ 		sweet_touch_init();
+ 		sweet_usb_probe();
+--- /dev/null
++++ b/bsd/dev/alioth_touch.c
+@@ -0,0 +1,620 @@
++/*
++ * alioth (POCO F3 / Redmi K40 / Mi 11X) touch: FocalTech FT3658U on QUP0
++ * SE4 in GENI SPI mode (spi@990000, chip select 0, SPI mode 0, max 6 MHz).
++ *
++ * Hardware facts from alioth's device tree (LineageOS
++ * android_kernel_xiaomi_sm8250, kona-v2.1 + alioth overlay):
++ *   pins    gpio8-10 qup4 (SPI data/clock), gpio11 qup4 (CS, pull-up),
++ *           gpio33 reset (out), gpio39 interrupt (in, pull-up)
++ *   power   vcc_i2c = PM8150A L1 (1.8 V), vdd = PM8150A L10 (3.2 V)
++ *   clocks  GCC_QUPV3_WRAP0_S4 (RCG 0x174d0, DFS), wrapper 0 AHB/core
++ * Protocol from Xiaomi's focaltech_spi driver (alioth-r-oss):
++ *   [reg, 0xa0 (read) | 0x00 (write), len_hi, len_lo, 3 dummy, data, crc16]
++ *   rx[3] & 0xa0 == 0 means the IC accepted the command; reads carry a
++ *   CRC-16 (poly 0x8408, init 0xffff) over data, little-endian.
++ *   Chip id: 0xa3 = 0x56, 0x9f = 0x52. Touch data: register 0x01, 6 bytes
++ *   per point, coordinates in 1/8 pixel (display-coords 8640 x 19200).
++ * The IC keeps its firmware in flash (the vendor driver only upgrades an
++ * older one), so nothing is downloaded here.
++ *
++ * Poll-driven on one kernel thread, like sweet_touch.c. Starts late
++ * (sweettouchdelay, default 45 s); sweettouch=0 disables it.
++ */
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++#include <sys/param.h>
++#include <sys/systm.h>
++#include <sys/errno.h>
++#include <kern/clock.h>
++#include <kern/thread.h>
++#include <kern/sched_prim.h>
++#include <machine/machine_routines.h>
++#include <pexpert/pexpert.h>
++
++extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
++extern kern_return_t thread_terminate(thread_t);
++extern int sweet_rpmh_vreg_enable(const char *res, unsigned mv);
++extern void sweet_hid_touch(int finger, int down, int x, int y);
++void alioth_touch_init(void);
++
++#define AT_SE_PA        0x00990000u
++#define AT_GCC_PA       0x00100000u
++#define AT_NORTH_PA     0x0f908000u     /* TLMM 0x0f000000 + NORTH + gpio8 */
++#define AT_SOUTH_PA     0x0f521000u     /* TLMM 0x0f000000 + SOUTH + gpio33 */
++#define AT_NORTH_GPIO0  8u
++#define AT_SOUTH_GPIO0  33u
++#define AT_GPIO_RESET   33u
++#define AT_GPIO_IRQ     39u
++#define AT_GCC_VOTE     0x52008u
++#define AT_GCC_MASK     ((1u << 6) | (1u << 7) | (1u << 8) | (1u << 9) | (1u << 14))
++#define AT_RCG          0x174d0u
++#define AT_MAX          10u
++#define AT_W            1080
++#define AT_H            2400
++
++/* GENI common */
++#define SE_FORCE_DEFAULT 0x020u
++#define SE_CGC_CTRL     0x024u
++#define SE_OUTPUT_CTRL  0x028u
++#define SE_STATUS       0x040u
++#define SE_MCLK         0x048u
++#define SE_FIFO_DISABLE 0x064u
++#define SE_FW           0x068u
++#define SE_CLK_SEL      0x07cu
++#define SE_BYTE_GRAN    0x254u
++#define SE_DMA          0x258u
++#define SE_TX_PACK0     0x260u
++#define SE_TX_PACK1     0x264u
++#define SE_RX_PACK0     0x284u
++#define SE_RX_PACK1     0x288u
++#define SE_CMD          0x600u
++#define SE_CTRL         0x604u
++#define SE_IRQ          0x610u
++#define SE_IRQ_EN       0x614u
++#define SE_IRQ_CLR      0x618u
++#define SE_S_IRQ_EN     0x644u
++#define SE_S_IRQ_CLR    0x648u
++#define SE_TX           0x700u
++#define SE_RX           0x780u
++#define SE_TX_COUNT     0x800u
++#define SE_RX_COUNT     0x804u
++#define SE_TX_WM        0x80cu
++#define SE_RX_WM        0x810u
++#define SE_RX_RFR       0x814u
++#define SE_GSI_EVENT_EN 0xe18u
++#define SE_IRQ_ROUTE    0xe1cu
++#define SE_HW_TX        0xe24u
++#define SE_HW_RX        0xe28u
++#define SE_DMA_GENERAL  0xe30u
++/* GENI SPI */
++#define SPI_CPHA        0x224u
++#define SPI_LOOPBACK    0x22cu
++#define SPI_CPOL        0x230u
++#define SPI_DEMUX_INV   0x24cu
++#define SPI_DEMUX_SEL   0x250u
++#define SPI_TRANS_CFG   0x25cu
++#define SPI_WORD_LEN    0x268u
++#define SPI_TX_LEN      0x26cu
++#define SPI_RX_LEN      0x270u
++#define SPI_DELAYS      0x278u
++#define SPI_FULL_DUPLEX 3u
++#define GENI_PROTO_SPI  1u
++#define SE_DONE         (1u << 0)
++#define SE_ABORT_DONE   (1u << 5)
++#define SE_ERRORS       (0x0eu | (3u << 24) | (3u << 28))
++#define SE_EVENTS       (SE_DONE | SE_ERRORS | SE_ABORT_DONE | (1u << 26) | \
++                         (1u << 27) | (1u << 30))
++
++/* FocalTech SPI */
++#define FTS_READ        0xa0u   /* 0x80 | DATA_CRC_EN */
++#define FTS_WRITE       0x00u
++#define FTS_DUMMY       3u
++#define FTS_POINTS_LEN  62u     /* register 0x01: status + count + 10 points */
++#define FTS_XFER_MAX    80u
++
++static struct {
++	vm_offset_t se, gcc, north, south;
++	bool started, dead;
++	unsigned fifo_depth;
++	uint32_t irq_status, active;
++	int x[AT_MAX], y[AT_MAX];
++} at;
++static int at_sleep_chan;
++
++static uint32_t
++at_rd(vm_offset_t base, uint32_t off)
++{
++	uint32_t v = *(volatile uint32_t *)(base + off);
++	__asm__ volatile("dmb oshld" ::: "memory");
++	return v;
++}
++
++static void
++at_wr(vm_offset_t base, uint32_t off, uint32_t val)
++{
++	__asm__ volatile("dmb oshst" ::: "memory");
++	*(volatile uint32_t *)(base + off) = val;
++	__asm__ volatile("dsb osh" ::: "memory");
++}
++
++static void
++at_wait(unsigned ms)
++{
++	uint64_t deadline;
++	clock_interval_to_deadline(ms, NSEC_PER_MSEC, &deadline);
++	(void)assert_wait_deadline(&at_sleep_chan, THREAD_UNINT, deadline);
++	thread_block(THREAD_CONTINUE_NULL);
++}
++
++static bool
++at_wait_clear(vm_offset_t base, uint32_t off, uint32_t mask)
++{
++	for (unsigned i = 0; i < 5000; ++i) {
++		if (!(at_rd(base, off) & mask)) {
++			return true;
++		}
++		delay(1);
++	}
++	return false;
++}
++
++/* TLMM: each gpio has a 0x1000 block; CFG at +0, IN_OUT at +4. */
++static vm_offset_t
++at_gpio_base(unsigned pin)
++{
++	if (pin >= AT_NORTH_GPIO0 && pin < AT_NORTH_GPIO0 + 4u) {
++		return at.north + (pin - AT_NORTH_GPIO0) * 0x1000u;
++	}
++	return at.south + (pin - AT_SOUTH_GPIO0) * 0x1000u;
++}
++
++/* pull: 0 none, 1 down, 3 up. drive: (mA / 2) - 1. */
++static void
++at_gpio(unsigned pin, unsigned func, unsigned pull, unsigned drive, bool out, bool high)
++{
++	vm_offset_t g = at_gpio_base(pin);
++	if (out) {
++		/* Latch the level first so enabling the output does not glitch. */
++		at_wr(g, 4u, (at_rd(g, 4u) & ~2u) | (high ? 2u : 0u));
++	}
++	uint32_t cfg = at_rd(g, 0u) & ~0x3ffu;
++	cfg |= pull | (func << 2) | (drive << 6) | (out ? 0x200u : 0u);
++	at_wr(g, 0u, cfg);
++}
++
++static bool
++at_gpio_in(unsigned pin)
++{
++	return at_rd(at_gpio_base(pin), 4u) & 1u;
++}
++
++/*
++ * Wrapper 0 and SE4 clocks. The RCG is in DFS mode on kona: the SE picks
++ * a firmware-defined performance level with CLK_SEL. Prefer a level that
++ * is the 19.2 MHz crystal (source 0, no divider, no M/N): divide by 4 for
++ * 4.8 MHz. Otherwise use level 0 with a divider that keeps any source up to
++ * 100 MHz at or below 5 MHz. Without DFS, program the crystal like sweet.
++ */
++static bool
++at_clocks(unsigned *clk_sel, unsigned *clk_div)
++{
++	at_wr(at.gcc, AT_GCC_VOTE, at_rd(at.gcc, AT_GCC_VOTE) | AT_GCC_MASK);
++	uint32_t dfs = at_rd(at.gcc, AT_RCG + 0x14u);
++	*clk_sel = 0;
++	*clk_div = 20;
++	if (dfs & 1u) {
++		for (unsigned l = 0; l < 8; ++l) {
++			uint32_t perf = at_rd(at.gcc, AT_RCG + 0x1cu + 4u * l);
++			printf("ALIOTH TOUCH: DFS level %u cfg=%#x\n", l, perf);
++			if (((perf >> 8) & 7u) == 0 && (perf & 0x1fu) <= 1u && !((perf >> 12) & 3u)) {
++				*clk_sel = l;
++				*clk_div = 4;
++				break;
++			}
++		}
++	} else {
++		uint32_t cfg = at_rd(at.gcc, AT_RCG + 4u);
++		cfg = (cfg & ~(0x371fu | (1u << 20))) | 1u;
++		at_wr(at.gcc, AT_RCG + 4u, cfg);
++		at_wr(at.gcc, AT_RCG, at_rd(at.gcc, AT_RCG) | 1u);
++		if (!at_wait_clear(at.gcc, AT_RCG, 1u)) {
++			printf("ALIOTH TOUCH: RCG update timeout\n");
++			return false;
++		}
++		*clk_div = 4;
++	}
++	printf("ALIOTH TOUCH: gcc vote=%#x dfs=%#x clk_sel=%u div=%u\n",
++	    at_rd(at.gcc, AT_GCC_VOTE), dfs, *clk_sel, *clk_div);
++	/* Voted branches: halt bit 31 clear once running. s_ahb may be in HW
++	 * clock gating (bit 1 of its CBCR), where the halt bit is meaningless. */
++	const uint32_t branches[] = {0x174cc, 0x17004, 0x23000, 0x23008};
++	for (unsigned i = 0; i < sizeof(branches) / sizeof(branches[0]); ++i) {
++		if (!at_wait_clear(at.gcc, branches[i], 1u << 31)) {
++			printf("ALIOTH TOUCH: GCC branch %#x halted (%#x)\n", branches[i],
++			    at_rd(at.gcc, branches[i]));
++			return false;
++		}
++	}
++	if (!(at_rd(at.gcc, 0x17008) & 2u) && !at_wait_clear(at.gcc, 0x17008, 1u << 31)) {
++		printf("ALIOTH TOUCH: s_ahb halted (%#x)\n", at_rd(at.gcc, 0x17008));
++		return false;
++	}
++	return true;
++}
++
++static bool
++at_se_init(unsigned clk_sel, unsigned clk_div)
++{
++	uint32_t fw = at_rd(at.se, SE_FW);
++	uint32_t tx = at_rd(at.se, SE_HW_TX), rx = at_rd(at.se, SE_HW_RX);
++	printf("ALIOTH TOUCH: se4 fw=%#x proto=%u status=%#x fifo-disable=%#x tx=%#x rx=%#x\n",
++	    fw, (fw >> 8) & 0xffu, at_rd(at.se, SE_STATUS), at_rd(at.se, SE_FIFO_DISABLE), tx, rx);
++	if (((fw >> 8) & 0xffu) != GENI_PROTO_SPI) {
++		printf("ALIOTH TOUCH: SE4 is not loaded with SPI firmware; stopping\n");
++		return false;
++	}
++	if (at_rd(at.se, SE_FIFO_DISABLE) & 1u) {
++		printf("ALIOTH TOUCH: SE4 is GSI-only (FIFO disabled); not supported\n");
++		return false;
++	}
++	if (((tx >> 24) & 0x3fu) != 32u || ((rx >> 24) & 0x3fu) != 32u ||
++	    ((tx >> 16) & 0x3fu) < 4u || ((rx >> 16) & 0x3fu) < 4u) {
++		printf("ALIOTH TOUCH: unexpected FIFO geometry; stopping\n");
++		return false;
++	}
++	if (at_rd(at.se, SE_STATUS) & 0x1001u) {
++		printf("ALIOTH TOUCH: SE4 already busy; stopping\n");
++		return false;
++	}
++	at.fifo_depth = (tx >> 16) & 0x3fu;
++	/* geni_se_io_init + geni_se_init, FIFO mode, polled. */
++	at_wr(at.se, SE_GSI_EVENT_EN, 0);
++	at_wr(at.se, SE_IRQ_ROUTE, 0);
++	at_wr(at.se, SE_S_IRQ_EN, 0);
++	at_wr(at.se, SE_IRQ_CLR, 0xffffffffu);
++	at_wr(at.se, SE_S_IRQ_CLR, 0xffffffffu);
++	at_wr(at.se, SE_DMA, 0);
++	at_wr(at.se, SE_OUTPUT_CTRL, at_rd(at.se, SE_OUTPUT_CTRL) | 0x7fu);
++	at_wr(at.se, SE_DMA_GENERAL, at_rd(at.se, SE_DMA_GENERAL) | 0x0fu);
++	at_wr(at.se, SE_CGC_CTRL, 0x7f);
++	at_wr(at.se, SE_FORCE_DEFAULT, 1);
++	at_wr(at.se, SE_CLK_SEL, clk_sel);
++	at_wr(at.se, SE_MCLK, (clk_div << 4) | 1u);
++	/* 8-bit words, four per FIFO word, MSB first (se_config_packing). */
++	at_wr(at.se, SE_TX_PACK0, 0x0007f8feu);
++	at_wr(at.se, SE_TX_PACK1, 0x000ffefeu);
++	at_wr(at.se, SE_RX_PACK0, 0x0007f8feu);
++	at_wr(at.se, SE_RX_PACK1, 0x000ffefeu);
++	at_wr(at.se, SE_BYTE_GRAN, 0);
++	at_wr(at.se, SPI_WORD_LEN, (at_rd(at.se, SPI_WORD_LEN) & ~0x3ffu) | (8u - 4u));
++	at_wr(at.se, SPI_LOOPBACK, at_rd(at.se, SPI_LOOPBACK) & ~3u);
++	at_wr(at.se, SPI_DEMUX_SEL, 0);          /* chip select 0 */
++	at_wr(at.se, SPI_CPHA, at_rd(at.se, SPI_CPHA) & ~1u);   /* mode 0 */
++	at_wr(at.se, SPI_CPOL, at_rd(at.se, SPI_CPOL) & ~4u);
++	at_wr(at.se, SPI_DEMUX_INV, 0);          /* CS active low */
++	at_wr(at.se, SPI_DELAYS, 0);
++	at_wr(at.se, SPI_TRANS_CFG, at_rd(at.se, SPI_TRANS_CFG) & ~1u);  /* no CS toggle */
++	at_wr(at.se, SE_TX_WM, 1);
++	at_wr(at.se, SE_RX_WM, 0);
++	at_wr(at.se, SE_RX_RFR, ((rx >> 16) & 0x3fu) - 2u);
++	at_wr(at.se, SE_IRQ_EN, SE_EVENTS);
++	if ((at_rd(at.se, SE_TX_COUNT) & 0xfffffffu) || (at_rd(at.se, SE_RX_COUNT) & 0x1ffffffu)) {
++		printf("ALIOTH TOUCH: inherited FIFO data; stopping\n");
++		return false;
++	}
++	return true;
++}
++
++static void
++at_abort(void)
++{
++	at_wr(at.se, SE_CTRL, 2);       /* M_GENI_CMD_ABORT */
++	bool done = false;
++	for (unsigned i = 0; i < 5000; ++i) {
++		if (at_rd(at.se, SE_IRQ) & SE_ABORT_DONE) {
++			done = true;
++			break;
++		}
++		delay(1);
++	}
++	if (!done || !at_wait_clear(at.se, SE_STATUS, 1u)) {
++		at.dead = true;
++		printf("ALIOTH TOUCH: abort failed status=%#x irq=%#x; stopping\n",
++		    at_rd(at.se, SE_STATUS), at_rd(at.se, SE_IRQ));
++	}
++	for (unsigned i = 0; i < 64 && (at_rd(at.se, SE_RX_COUNT) & 0x1ffffffu); ++i) {
++		(void)at_rd(at.se, SE_RX);
++	}
++	at_wr(at.se, SE_IRQ_CLR, 0xffffffffu);
++}
++
++/* One full-duplex transfer with CS held for its whole length. */
++static int
++at_xfer(const uint8_t *tx, uint8_t *rx, unsigned len)
++{
++	if (at.dead || !len || len > FTS_XFER_MAX) {
++		return EIO;
++	}
++	if (!at_wait_clear(at.se, SE_STATUS, 1u)) {
++		at.dead = true;
++		return EBUSY;
++	}
++	at_wr(at.se, SE_IRQ_CLR, 0xffffffffu);
++	at_wr(at.se, SPI_TX_LEN, len);
++	at_wr(at.se, SPI_RX_LEN, len);
++	at_wr(at.se, SE_CMD, SPI_FULL_DUPLEX << 27);
++	unsigned sent = 0, got = 0;
++	int err = ETIMEDOUT;
++	for (unsigned i = 0; i < 20000; ++i) {
++		uint32_t irq = at_rd(at.se, SE_IRQ);
++		at.irq_status = irq;
++		if (irq & SE_ERRORS) {
++			err = EIO;
++			break;
++		}
++		uint32_t queued = at_rd(at.se, SE_TX_COUNT) & 0xfffffffu;
++		while (sent < len && queued < at.fifo_depth) {
++			uint32_t word = 0;
++			for (unsigned j = 0; j < 4 && sent + j < len; ++j) {
++				word |= (uint32_t)tx[sent + j] << (8u * j);
++			}
++			at_wr(at.se, SE_TX, word);
++			sent += 4;
++			++queued;
++		}
++		uint32_t count = at_rd(at.se, SE_RX_COUNT) & 0x1ffffffu;
++		if (count > 64) {
++			err = EIO;
++			break;
++		}
++		while (count--) {
++			uint32_t word = at_rd(at.se, SE_RX);
++			for (unsigned j = 0; j < 4 && got < len; ++j) {
++				rx[got++] = (uint8_t)(word >> (8u * j));
++			}
++		}
++		if (irq & SE_DONE) {
++			/* Drain words that arrived with DONE. */
++			for (unsigned k = at_rd(at.se, SE_RX_COUNT) & 0x1ffffffu; k && k <= 64; --k) {
++				uint32_t word = at_rd(at.se, SE_RX);
++				for (unsigned j = 0; j < 4 && got < len; ++j) {
++					rx[got++] = (uint8_t)(word >> (8u * j));
++				}
++			}
++			at_wr(at.se, SE_IRQ_CLR, irq);
++			if (got == len && sent >= len) {
++				return 0;
++			}
++			err = EIO;
++			break;
++		}
++		at_wr(at.se, SE_IRQ_CLR, irq & ((1u << 26) | (1u << 27) | (1u << 30)));
++		delay(1);
++	}
++	at_abort();
++	return err;
++}
++
++static uint16_t
++at_crc16(const uint8_t *p, unsigned n)
++{
++	uint16_t crc = 0xffff;
++	for (unsigned i = 0; i < n; ++i) {
++		crc ^= p[i];
++		for (unsigned b = 0; b < 8; ++b) {
++			crc = (crc & 1u) ? (uint16_t)((crc >> 1) ^ 0x8408u) : (uint16_t)(crc >> 1);
++		}
++	}
++	return crc;
++}
++
++/* focaltech_spi.c fts_read: [reg, 0xa0, len, 3 dummy] then len data + crc. */
++static int
++at_read(uint8_t reg, uint8_t *data, unsigned n)
++{
++	uint8_t tx[FTS_XFER_MAX] = {0}, rx[FTS_XFER_MAX] = {0};
++	unsigned dp = 4u + FTS_DUMMY, total = dp + n + 2u;
++	if (!n || total > FTS_XFER_MAX) {
++		return EINVAL;
++	}
++	tx[0] = reg;
++	tx[1] = FTS_READ;
++	tx[2] = (uint8_t)(n >> 8);
++	tx[3] = (uint8_t)n;
++	int err = EIO;
++	for (unsigned attempt = 0; attempt < 3; ++attempt) {
++		err = at_xfer(tx, rx, total);
++		if (err) {
++			delay(150);
++			continue;
++		}
++		if (rx[3] & 0xa0u) {
++			err = EBUSY;
++		} else if (at_crc16(rx + dp, n) != (uint16_t)(rx[dp + n] | (rx[dp + n + 1] << 8))) {
++			err = EBADMSG;
++		} else {
++			for (unsigned i = 0; i < n; ++i) {
++				data[i] = rx[dp + i];
++			}
++			return 0;
++		}
++		delay(150);     /* CS_HIGH_DELAY in the vendor driver */
++	}
++	return err;
++}
++
++static void
++at_report(uint32_t mask, const int *x, const int *y)
++{
++	for (unsigned id = 0; id < AT_MAX; ++id) {
++		uint32_t bit = 1u << id;
++		if (mask & bit) {
++			if (!(at.active & bit) || x[id] != at.x[id] || y[id] != at.y[id]) {
++				sweet_hid_touch((int)id, 1, x[id], y[id]);
++			}
++			at.x[id] = x[id];
++			at.y[id] = y[id];
++		} else if (at.active & bit) {
++			sweet_hid_touch((int)id, 0, at.x[id], at.y[id]);
++		}
++	}
++	at.active = mask;
++}
++
++/* fts_read_parse_touchdata, with buf = data at register 0x01. */
++static int
++at_poll(void)
++{
++	uint8_t d[FTS_POINTS_LEN];
++	int x[AT_MAX] = {0}, y[AT_MAX] = {0};
++	uint32_t mask = 0, seen = 0;
++	int err = at_read(0x01, d, sizeof(d));
++	if (err) {
++		return err;
++	}
++	unsigned n = d[1] & 0x0fu;
++	if (n == 0x0fu && d[1] == 0xffu && d[2] == 0xffu && d[3] == 0xffu) {
++		return EIO;     /* IC lost its state; vendor driver recovers it */
++	}
++	if (n > AT_MAX) {
++		return EIO;
++	}
++	for (unsigned i = 0; i < AT_MAX; ++i) {
++		const uint8_t *p = d + 2u + 6u * i;   /* vendor buf[3 + 6i] */
++		unsigned id = p[2] >> 4, event = p[0] >> 6;
++		if (id >= AT_MAX) {
++			break;
++		}
++		if (seen & (1u << id)) {
++			return EIO;
++		}
++		seen |= 1u << id;
++		if (event == 1u) {
++			continue;   /* up */
++		}
++		unsigned rx8 = ((unsigned)(p[0] & 0x0fu) << 11) | ((unsigned)p[1] << 3) | ((p[4] & 0xe0u) >> 5);
++		unsigned ry8 = ((unsigned)(p[2] & 0x0fu) << 11) | ((unsigned)p[3] << 3) | ((p[4] & 0x1cu) >> 2);
++		unsigned px = rx8 / 8u, py = ry8 / 8u;
++		if (px >= AT_W || py >= AT_H) {
++			return EIO;
++		}
++		mask |= 1u << id;
++		x[id] = (int)px;
++		y[id] = (int)py;
++	}
++	at_report(mask, x, y);
++	return 0;
++}
++
++static void
++at_thread(void *arg, wait_result_t result)
++{
++	unsigned delay_s = 45, clk_sel = 0, clk_div = 20;
++	(void)arg;
++	(void)result;
++	(void)PE_parse_boot_argn("sweettouchdelay", &delay_s, sizeof(delay_s));
++	printf("ALIOTH TOUCH: FT3658U on SPI, starting in %u s\n", delay_s);
++	at_wait(delay_s * 1000u);
++	at.gcc = ml_io_map(AT_GCC_PA, 0x60000);
++	at.north = ml_io_map(AT_NORTH_PA, 0x4000);
++	at.south = ml_io_map(AT_SOUTH_PA, 0x7000);
++	at.se = ml_io_map(AT_SE_PA, 0x4000);
++	if (!at.gcc || !at.north || !at.south || !at.se) {
++		printf("ALIOTH TOUCH: MMIO mapping failed\n");
++		goto out;
++	}
++	printf("ALIOTH TOUCH: TLMM reset=%#x/%#x irq=%#x/%#x\n",
++	    at_rd(at_gpio_base(AT_GPIO_RESET), 0), at_rd(at_gpio_base(AT_GPIO_RESET), 4),
++	    at_rd(at_gpio_base(AT_GPIO_IRQ), 0), at_rd(at_gpio_base(AT_GPIO_IRQ), 4));
++	/* Vendor power-on: reset low, vcc_i2c, 1 ms, vdd, then reset high + 200 ms. */
++	at_gpio(AT_GPIO_IRQ, 0, 3, 3, false, false);    /* input, pull-up, 8 mA */
++	at_gpio(AT_GPIO_RESET, 0, 3, 3, true, false);   /* hold in reset */
++	int perr = sweet_rpmh_vreg_enable("ldoc1", 1800);
++	if (perr) {
++		printf("ALIOTH TOUCH: L1C (vcc_i2c) enable failed %d; stopping\n", perr);
++		goto out;
++	}
++	at_wait(1);
++	perr = sweet_rpmh_vreg_enable("ldoc10", 3200);
++	if (perr) {
++		printf("ALIOTH TOUCH: L10C (vdd) enable failed %d; stopping\n", perr);
++		goto out;
++	}
++	at_wait(10);
++	if (!at_clocks(&clk_sel, &clk_div) || !at_se_init(clk_sel, clk_div)) {
++		goto out;
++	}
++	/* qup4 pins: data/clock no pull 6 mA, CS pull-up 16 mA (DT pinctrl). */
++	at_gpio(8, 1, 0, 2, false, false);
++	at_gpio(9, 1, 0, 2, false, false);
++	at_gpio(10, 1, 0, 2, false, false);
++	at_gpio(11, 1, 3, 7, false, false);
++	at_gpio(AT_GPIO_RESET, 0, 3, 3, true, false);
++	at_wait(2);
++	at_gpio(AT_GPIO_RESET, 0, 3, 3, true, true);
++	at_wait(200);
++	uint8_t id1 = 0, id2 = 0;
++	int e1 = 0, e2 = 0;
++	for (unsigned tries = 0; tries < 10; ++tries) {
++		e1 = at_read(0xa3, &id1, 1);
++		e2 = at_read(0x9f, &id2, 1);
++		if (!e1 && !e2 && id1 && id2) {
++			break;
++		}
++		at_wait(50);
++	}
++	uint8_t fw = 0;
++	(void)at_read(0xa6, &fw, 1);
++	printf("ALIOTH TOUCH: chip id err=%d/%d %02x:%02x fw=%#x irq=%#x\n",
++	    e1, e2, id1, id2, fw, at.irq_status);
++	if (e1 || e2 || id1 != 0x56u || id2 != 0x52u) {
++		printf("ALIOTH TOUCH: FT3658U (56:52) not found; stopping\n");
++		goto out;
++	}
++	printf("ALIOTH TOUCH: FT3658U ready, 1080x2400, poll 10 ms\n");
++	unsigned errors = 0, ticks = 0;
++	while (!at.dead) {
++		/* INT (gpio39, level low in the DT) is low while a report waits;
++		 * read then, while touched, and every 100 ms regardless. */
++		if (at.active || !at_gpio_in(AT_GPIO_IRQ) || (++ticks % 10u) == 0) {
++			int err = at_poll();
++			if (err) {
++				if ((errors++ % 100u) == 0) {
++					printf("ALIOTH TOUCH: report err=%d irq=%#x\n", err, at.irq_status);
++				}
++				if (errors == 10) {
++					at_report(0, at.x, at.y);
++				}
++			} else {
++				errors = 0;
++			}
++		}
++		at_wait(10);
++	}
++	at_report(0, at.x, at.y);
++out:
++	(void)thread_terminate(current_thread());
++	thread_block(THREAD_CONTINUE_NULL);
++}
++
++void
++alioth_touch_init(void)
++{
++	int enabled = 1;
++	thread_t thread;
++	if (at.started) {
++		return;
++	}
++	at.started = true;
++	(void)PE_parse_boot_argn("sweettouch", &enabled, sizeof(enabled));
++	if (!enabled) {
++		printf("ALIOTH TOUCH: disabled (sweettouch=0)\n");
++		return;
++	}
++	kern_return_t kr = kernel_thread_start(at_thread, NULL, &thread);
++	if (kr == KERN_SUCCESS) {
++		thread_deallocate(thread);
++	} else {
++		printf("ALIOTH TOUCH: kernel_thread_start failed %d\n", kr);
++	}
++}
++#endif /* ARM64_BOARD_CONFIG_SWEET */
