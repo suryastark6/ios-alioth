@@ -22,6 +22,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -67,7 +68,15 @@ def main():
     os.makedirs(dtbdir, exist_ok=True)
 
     print(f'adb: {adb}')
-    run(adb, 'wait-for-device')
+    # 'adb wait-for-device' only matches the Android state 'device' and never
+    # returns while the phone is in OrangeFox/TWRP ('recovery'): poll instead.
+    for _ in range(120):
+        state = run(adb, 'get-state', check=False).strip()
+        if state in ('device', 'recovery'):
+            break
+        time.sleep(1)
+    else:
+        raise SystemExit('no phone found in recovery: check USB and that OrangeFox has started')
     device = sh(adb, 'getprop ro.product.device') or sh(adb, 'getprop ro.build.product')
     print(f'device: {device or "unknown"}')
     if 'alioth' not in (device or ''):
