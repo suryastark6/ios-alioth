@@ -1,7 +1,7 @@
 #!/bin/bash
 # Build an alioth test image for one milestone of docs/ALIOTH-PLAN.md.
 #
-#   tools/build-alioth.sh m1 [--header 2|3] [--dtb DTB]
+#   tools/build-alioth.sh m1 [--header 2|3] [--dtb DTB] [--disp full|none|kick]
 #   tools/build-alioth.sh m3 KERNEL [--cpus N] [--header 2|3] [--dtb DTB]
 #   tools/build-alioth.sh m5 KERNEL [--cpus N] [--header 2|3] [--dtb DTB]
 #
@@ -16,11 +16,14 @@
 # GitHub Actions run. --header 3 (default) packs a boot image v3: ABL then
 # takes the DTB from the phone's vendor_boot. --header 2 needs --dtb
 # (dtb/boot_unpacked/dtb from tools/alioth-backup.py).
-# Output: out/alioth-<milestone>-v<header>.img
+# --disp: display writes for a panel test (shim/display.c DISP_TEST): full
+# (default: autorefresh, else kicks), none (registers only read), kick (no
+# autorefresh, one CTL_START per draw). Not full adds -disp<mode> to the name.
+# Output: out/alioth-<milestone>-v<header>[-disp<mode>].img
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-usage() { sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'; exit 1; }
+usage() { sed -n '2,/^set -euo/{/^#/p}' "$0" | sed 's/^# \{0,1\}//'; exit 1; }
 [ $# -ge 1 ] || usage
 M=$1; shift
 KERNEL=
@@ -30,9 +33,10 @@ case "$M" in
 		[ -f "$KERNEL" ] || { echo "error: kernel $KERNEL not found" >&2; exit 1; } ;;
 	*) usage ;;
 esac
-HEADER=3 DTB=dtb/boot_unpacked/dtb CPUS=1
+HEADER=3 DTB=dtb/boot_unpacked/dtb CPUS=1 DISP=full
 while [ $# -gt 0 ]; do
 	case "$1" in
+		--disp) DISP=$2; shift 2 ;;
 		--header) HEADER=$2; shift 2 ;;
 		--dtb) DTB=$2; shift 2 ;;
 		--cpus) CPUS=$2; shift 2 ;;
@@ -43,8 +47,14 @@ case "$CPUS" in [1-8]) ;; *) echo "error: --cpus 1-8" >&2; exit 1 ;; esac
 if [ "$HEADER" = 2 ] && [ ! -f "$DTB" ]; then
 	echo "error: --header 2 needs the phone's DTB ($DTB): run tools/alioth-backup.py" >&2; exit 1
 fi
+case "$DISP" in
+	full) DISP_DEF= ;;
+	none) DISP_DEF=-DDISP_TEST=1 ;;
+	kick) DISP_DEF=-DDISP_TEST=2 ;;
+	*) echo "error: --disp full|none|kick" >&2; exit 1 ;;
+esac
 mkdir -p out shim/out
-OUT=out/alioth-$M-v$HEADER.img
+OUT=out/alioth-$M-v$HEADER${DISP_DEF:+-disp$DISP}.img
 
 # Common boot-args (see docs/SWEET-README.md). wdt=-1: no watchdog;
 # -enable_kprintf_spam + no sweetfb_noconsole: kernel log on the panel.
@@ -63,7 +73,7 @@ if [ -n "$PAYLOAD" ]; then
 	python3 tools/mkadt.py shim/out/alioth.adt --board alioth --highmem
 	python3 tools/mkpayload.py "$KERNEL" shim/out/alioth.adt "$PAYLOAD" --cmdline "$ARGS"
 fi
-(cd shim && BOARD=alioth HEADER="$HEADER" DTB="$(cd .. && realpath -m "$DTB")" ./build.sh ${PAYLOAD:+"../$PAYLOAD"} >/dev/null)
+(cd shim && BOARD=alioth SHIM_CFLAGS="$DISP_DEF" HEADER="$HEADER" DTB="$(cd .. && realpath -m "$DTB")" ./build.sh ${PAYLOAD:+"../$PAYLOAD"} >/dev/null)
 cp shim/out/shim-boot.img "$OUT"
 echo "$OUT  ($(stat -c %s "$OUT") bytes)"
 [ -n "$PAYLOAD" ] && echo "boot-args: $ARGS"

@@ -98,11 +98,82 @@ static void delay_ms(unsigned ms)
 		;
 }
 
+#if defined(BOARD_ALIOTH)
+/*
+ * Reboot reason in the PMIC. On alioth the IMEM word alone was ignored: the
+ * shim's reset came back in Android twice (NOTES.md boot 02). The PM8150 PON
+ * node has qcom,store-hard-reset-reason, so ABL reads the reason from PON
+ * SOFT_RB_SPARE (SID 0, 0x88f), bits [7:1] on this PON generation, where
+ * Linux's qpnp_pon_set_restart_reason() puts PON_RESTART_REASON_BOOTLOADER
+ * (2) for "reboot bootloader". PMIC arbiter v5 (spmi@c440000): the APID
+ * lookup and observer read are those of patch 0060 (run on sweet's phone);
+ * the write uses the apps-owned (EE 0) channel like Linux's
+ * spmi-pmic-arb pmic_arb_write_cmd. Only that one spare register is
+ * written, read-modify-write, and only when apps owns the PON channel.
+ */
+#define SPMI_CORE		0x0c440000UL
+#define SPMI_CHNLS		0x0c600000UL	/* RW channels, 0x10000 per APID */
+#define SPMI_OBS		0x0e600000UL	/* EE 0 observer, 0x80 per APID */
+#define SPMI_CNFG		0x0c40a000UL
+#define SPMI_CMD		0x00
+#define SPMI_STATUS		0x08
+#define SPMI_WDATA0		0x10
+#define SPMI_RDATA0		0x18
+#define SPMI_OP_EXT_WRITEL	0U
+#define SPMI_OP_EXT_READL	1U
+#define PON_PPID		0x008		/* SID 0, peripheral 0x08 (0x800) */
+#define PON_SOFT_RB_SPARE	0x8f
+#define PON_REASON_BOOTLOADER	2
+
+static int spmi_done(uintptr_t status)
+{
+	for (int i = 0; i < 100000; i++) {
+		uint32_t s = rd32(status);
+		if (s & 1)
+			return (s & 0xe) ? -1 : 0;	/* failure, denied, dropped */
+	}
+	return -1;
+}
+
+/* 0: written; <0: not possible (unknown arbiter, no apps-owned channel). */
+static int pmic_reboot_bootloader(void)
+{
+	uint32_t ver = rd32(SPMI_CORE), count = rd32(SPMI_CORE + 4) & 0x7ff;
+	if (ver < 0x50000000U || ver >= 0x70000000U || !count || count > 512)
+		return -1;
+	int apid = -1;
+	for (uint32_t i = 0; i < count && apid < 0; i++) {
+		uint32_t map = rd32(SPMI_CORE + 0x900 + 4 * i);
+		if (map && ((map >> 8) & 0xfff) == PON_PPID &&
+		    (rd32(SPMI_CNFG + 0x700 + 4 * i) & 7) == 0)
+			apid = (int)i;
+	}
+	if (apid < 0)
+		return -2;
+	uintptr_t obs = SPMI_OBS + 0x80UL * (uint32_t)apid;
+	wr32(obs + SPMI_CMD, SPMI_OP_EXT_READL << 27 | PON_SOFT_RB_SPARE << 4);
+	__asm__ volatile("dsb sy" ::: "memory");
+	if (spmi_done(obs + SPMI_STATUS))
+		return -3;
+	uint32_t v = rd32(obs + SPMI_RDATA0) & 0xff;
+	v = (v & 1) | PON_REASON_BOOTLOADER << 1;
+	uintptr_t ch = SPMI_CHNLS + 0x10000UL * (uint32_t)apid;
+	wr32(ch + SPMI_WDATA0, v);
+	__asm__ volatile("dsb sy" ::: "memory");
+	wr32(ch + SPMI_CMD, SPMI_OP_EXT_WRITEL << 27 | PON_SOFT_RB_SPARE << 4);	/* 1 byte */
+	__asm__ volatile("dsb sy" ::: "memory");
+	return spmi_done(ch + SPMI_STATUS) ? -4 : 0;
+}
+#endif
+
 static void __attribute__((noreturn)) reset(unsigned after_s)
 {
 	con_skip();
 	con_str("RESET", after_s > 20 ? "in 40s" : "in 20s");
 	delay_ms(after_s * 1000);
+#if defined(BOARD_ALIOTH)
+	(void)pmic_reboot_bootloader();
+#endif
 	wr32(IMEM_RESTART_REASON, RESTART_BOOTLOADER);
 	__asm__ volatile("dsb sy" ::: "memory");
 	smc(PSCI_SYSTEM_RESET, 0, 0, 0);

@@ -20,7 +20,8 @@ case "$BOARD" in
 	alioth) BOARD_DEF=-DBOARD_ALIOTH ;;
 	*) echo "error: unknown BOARD=$BOARD (sweet, alioth)" >&2; exit 1 ;;
 esac
-CFLAGS="$BOARD_DEF -O2 -ffreestanding -nostdlib -fno-pic -mgeneral-regs-only -mstrict-align -fno-stack-protector -Wall -Wextra"
+# SHIM_CFLAGS: extra defines, e.g. -DDISP_TEST=1 (tools/build-alioth.sh --disp)
+CFLAGS="$BOARD_DEF ${SHIM_CFLAGS:-} -O2 -ffreestanding -nostdlib -fno-pic -mgeneral-regs-only -mstrict-align -fno-stack-protector -Wall -Wextra"
 mkdir -p out
 for f in start.S shim.c console.c mmu.c fdt.c loader.c ufs.c display.c; do
 	$CC $CFLAGS -c $f -o out/${f%.*}.o

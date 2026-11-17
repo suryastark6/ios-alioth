@@ -1,0 +1,61 @@
+name: alioth-images
+
+# Test boot images for alioth (tools/build-alioth.sh) on a Linux runner, for
+# testers without a Linux machine. M3 uses the newest kernel from the
+# 'kernel' branch (published by the xnu workflow). Download:
+#   gh run download <run-id> -n alioth-images -D out
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "shim/**"
+      - "tools/build-alioth.sh"
+      - "tools/boards/alioth.py"
+      - "tools/mkadt.py"
+      - "tools/mkpayload.py"
+      - ".github/workflows/alioth-images.yml"
+
+concurrency:
+  group: alioth-images-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deps
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q gcc-aarch64-linux-gnu mkbootimg cpio device-tree-compiler
+
+      - name: Kernel
+        run: |
+          git fetch -q --depth 1 origin kernel
+          git show FETCH_HEAD:kernel.development.sweet > kernel.development.sweet
+          git show FETCH_HEAD:BUILD.txt > kernel-BUILD.txt
+          cat kernel-BUILD.txt
+
+      - name: Build
+        run: |
+          set -euo pipefail
+          tools/build-alioth.sh m1
+          tools/build-alioth.sh m1 --disp none
+          tools/build-alioth.sh m1 --disp kick
+          tools/build-alioth.sh m3 kernel.development.sweet
+          {
+            printf 'source  %s\nrun     %s/%s/actions/runs/%s\n' \
+              "$GITHUB_SHA" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID"
+            sed 's/^/kernel: /' kernel-BUILD.txt
+            (cd out && sha256sum *.img)
+          } > out/BUILD.txt
+          cat out/BUILD.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: alioth-images
+          path: out/
+          retention-days: 30

@@ -54,7 +54,22 @@ static const uint32_t sspp_off[] = {
 	0x5000, 0x7000, 0x9000, 0xb000, 0x25000, 0x27000, 0x29000, 0x2b000,
 };
 
+/*
+ * DISP_TEST (tools/build-alioth.sh --disp): which display writes the shim
+ * makes, to find the one that blanks a panel. The test phone's aftermarket
+ * LCD went black with the full sequence (NOTES.md boots 01-02).
+ *   0 full: autorefresh, else a kick per draw (default)
+ *   1 none: registers are only read; nothing is sent to the panel
+ *   2 kick: no autorefresh; one CTL_START per draw
+ */
+#ifndef DISP_TEST
+#define DISP_TEST		0
+#endif
+#define DISP_TEST_NONE		1
+#define DISP_TEST_KICK		2
+
 static int ctl = -1;		/* CTL driving DSI0 */
+static int no_writes;		/* DISP_TEST_NONE */
 static int pp = -1;		/* pingpong with tear check on */
 static int autorefresh;		/* 1: frames flow without kicks */
 static uint64_t last_kick;
@@ -93,7 +108,7 @@ static void kick(void)
 
 void disp_present(void)
 {
-	if (ctl < 0 || autorefresh)
+	if (ctl < 0 || autorefresh || no_writes)
 		return;
 	/* At most one frame per ~17 ms: let the previous transfer finish. */
 	uint64_t due = last_kick + ticks_per_ms() * 17;
@@ -128,7 +143,7 @@ static void follow_scanout(void)
  * loader passes it to XNU as sweetkick= (patch 0085 kicks on a timer). */
 unsigned long long disp_kick_pa(void)
 {
-	return (ctl >= 0 && !autorefresh) ? MDP_CTL(ctl) + CTL_START : 0;
+	return (ctl >= 0 && !autorefresh && !no_writes) ? MDP_CTL(ctl) + CTL_START : 0;
 }
 
 const char *disp_init(void)
@@ -142,6 +157,13 @@ const char *disp_init(void)
 			pp = i;
 	if (ctl < 0)
 		return "no CTL on DSI0: no splash path";
+#if DISP_TEST == DISP_TEST_NONE
+	no_writes = 1;
+	return "test none: read only";
+#elif DISP_TEST == DISP_TEST_KICK
+	kick();
+	return "test kick: no autorefresh";
+#endif
 
 	/* Without a pingpong in tear-check mode, per-frame kicks are the only way. */
 	if (pp >= 0) {
