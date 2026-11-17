@@ -8,3 +8,7 @@ shim/out/
 xnu/out/
 xnu/out-*/
 __pycache__/
+# built test images (tools/build-alioth.sh)
+out/
+# screen photos
+photos/
