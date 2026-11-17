@@ -60,7 +60,9 @@ Most values are already filled in from alioth's device tree source ([ALIOTH-HARD
 
 ### M1. Own code runs
 
-1. Check the stock boot header version (`unpack_bootv2.py` stops on v3+). If ABL accepts a v2 image through `fastboot boot`, use `shim/build.sh` as-is with `BOARD=alioth DTB=dtb/boot_unpacked/dtb`. If it does not, there are two fallbacks: build a v3 image whose DTB comes from `vendor_boot`, or hide the payload inside the kernel image (the Redmi Note 12 port had to do this).
+Step by step for Windows: [FIRST-BOOT.md](FIRST-BOOT.md). Images: `tools/build-alioth.sh m1|m3|m5`.
+
+1. alioth uses Virtual A/B with `vendor_boot`, so its stock boot images are header v3. Both are prepared: **v3** (`--header 3`, default), where ABL takes the DTB and a vendor ramdisk from the phone's `vendor_boot` and the loader finds our payload behind that ramdisk; and **v2** (`--header 2`) with the stock DTB extracted by `tools/unpack_vendor_boot.py`. If ABL refuses both, the last fallback is hiding the payload inside the kernel image (the Redmi Note 12 port had to do this).
 2. Find out whether ABL leaves a watchdog running. The shim should print and stay alive for at least 60 s.
 3. Test reboot-to-bootloader from the shim (IMEM restart reason + PS_HOLD). This becomes your escape hatch.
 
@@ -76,9 +78,9 @@ Most values are already filled in from alioth's device tree source ([ALIOTH-HARD
 
 ### M3. XNU starts
 
-1. Fill the memory fields from `fdt-scan.py`. Prefer one large range above 4 GiB that no carve-out touches (as sweet's `--highmem` does). Keep clear of the dynamic pools' alloc-ranges.
-2. `python3 tools/mkadt.py shim/out/alioth.adt --board alioth --highmem`, then `mkpayload.py` and `BOARD=alioth shim/build.sh` (README steps 3-4), with `cpus=1` first.
-3. Use the sweet kernel unchanged for this boot. If 0010/0012's framebuffer address is wrong for alioth, the early console stays blank until that is fixed.
+1. RAM: 3 GiB at `0x100000000` is already set. The shim checks it against the live memory and reserved-memory nodes and refuses to boot XNU if it doesn't fit, printing the conflicting region.
+2. `tools/build-alioth.sh m3 path/to/kernel.development.sweet` builds the ADT, payload and boot image in one step, with `cpus=1` (`--cpus 8` for M4).
+3. The CI kernel contains 0082 (keys) and 0084 (sweet touch/USB off on alioth). 0010/0012's framebuffer address (`0x9c000000`, 1080 wide) matches alioth's splash buffer.
 
 **Done when** the kernel log reaches "waiting for root device" (or further).
 

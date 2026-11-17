@@ -32,11 +32,15 @@ Hardware facts with sources: [docs/ALIOTH-HARDWARE.md](docs/ALIOTH-HARDWARE.md).
 - `xnu/patches/0082`: the key driver reads the volume-up GPIO from the device tree (alioth: PM8150 GPIO6). Without the node, sweet's wiring is unchanged.
 - `tools/fdt-scan.py`: reads a live device tree and prints everything a port needs, such as memory banks and carve-outs, splash framebuffer, panel mode, GIC, timer, CPUs, UFS, touch bus and buttons. It also suggests values for `tools/boards/alioth.py`.
 - `tools/alioth-backup.sh`: from OrangeFox/TWRP, backs up `persist`, modem partitions, `boot`, `dtbo`, `vbmeta`, `vendor_boot` and pulls the live device tree.
-- `tools/unpack_bootv2.py`: now stops with a clear message on boot header v3/v4 instead of misreading them.
+- `tools/unpack_bootv2.py`: now stops with a clear message on boot header v3/v4 instead of misreading them. `tools/unpack_vendor_boot.py` extracts the stock DTB from alioth's `vendor_boot`.
+- `tools/build-alioth.sh m1|m3|m5 [KERNEL]`: one command per milestone test image, boot header v3 (default) or v2.
+- `xnu/patches/0084`: on alioth, sweet's touch driver (which would power sweet's touch rail, a different regulator here) and USB driver (sweet's PHY) stay off; `userdata` is found on any UFS LUN.
 
 The kernel patches, iOS root image tooling and diagnostics are unchanged from ios-sweet so far. The original documentation is in [docs/SWEET-README.md](docs/SWEET-README.md), and the full upstream engineering log is the [ios-sweet NOTES.md](https://github.com/dipa-studio/ios-sweet/blob/main/NOTES.md).
 
 ## Getting started (M0)
+
+**On Windows:** follow [docs/FIRST-BOOT.md](docs/FIRST-BOOT.md) (`tools/alioth-backup.py` needs only Python and adb). On Linux/macOS:
 
 You need a POCO F3 / Redmi K40 / Mi 11X with an **unlocked bootloader**, a Linux PC with `adb`, `fastboot`, `python3`, `dtc` and `aarch64-linux-gnu-gcc`, and OrangeFox or TWRP for alioth.
 
