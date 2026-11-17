@@ -19,10 +19,12 @@ BOARD = {
     'mem_size': None,
     # Every fixed carve-out is below 4 GiB and every dynamic pool's
     # alloc-ranges ends at 0xffffffff (SRC), so the bank at 0x100000000 is the
-    # candidate, as on sweet. Its size depends on RAM (6/8 GiB) and comes
-    # from the live memory node, which ABL fills in.
-    'high_phys_base': None,
-    'high_mem_size': None,
+    # candidate, as on sweet. 3 GiB fits both the 6 GB and the 8 GB phone
+    # (6 GB: at least 4 GiB above 4 GiB). Not measured yet: the shim checks
+    # it against ABL's live memory and reserved-memory nodes and refuses to
+    # boot if it does not fit (shim/fdt.c fdt_check_range, CHECK_RAM).
+    'high_phys_base': 0x100000000,
+    'high_mem_size': 0xc0000000,
     'gicd': 0x17a00000, 'gicd_size': 0x10000,     # SRC interrupt-controller@17a00000
     'gicr': 0x17a60000, 'gicr_size': 0x100000,    # SRC
     'timebase': 19200000,                          # SRC timer clock-frequency

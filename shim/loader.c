@@ -10,6 +10,7 @@
 #include <stdint.h>
 #include "console.h"
 #include "fdt.h"
+#include "board.h"
 #include "loader.h"
 
 #define BOOT_LINE_LENGTH	608
@@ -125,7 +126,7 @@ const char *loader_boot(uintptr_t dtb)
 	if (!found)
 		return "no SWEETXNU payload";
 	if (found != rd_start) {
-		con_hex2("PAYLOAD", "at=", found, "skip=", found - rd_start);
+		con_hex("PAYLOAD", found);
 		rd_start = found;
 	}
 	const struct payload *p = (const struct payload *)rd_start;
@@ -136,6 +137,21 @@ const char *loader_boot(uintptr_t dtb)
 	con_hex2("PHYS", "base=", p->phys_base, "size=", p->mem_size);
 	con_hex("VIRT", p->virt_base);
 	con_hex("ENTRY", p->entry_va);
+
+	/* XNU's RAM range against ABL's live device tree. */
+	uint64_t rb = 0, rs = 0;
+	int ram = fdt_check_range(dtb, p->phys_base, p->mem_size, &rb, &rs);
+	if (ram == 0)
+		con_str("RAM", "ok: in a memory bank, not reserved");
+	else if (ram == 2) {
+		con_hex("RSVD", rb);	/* 64-bit: con_hex2 prints 32 bits */
+		con_hex("RSVDLEN", rs);
+	}
+	else
+		con_str("RAM", ram == 1 ? "NOT inside a /memory bank" : "DTB not understood, unchecked");
+	if (CHECK_RAM && ram != 0)
+		return ram == 2 ? "RAM overlaps reserved: not booting"
+				: "RAM range not verified: not booting";
 
 	/* The payload must not overlap where the kernel goes. */
 	if (rd_end > p->phys_base && rd_start < p->phys_base + p->mem_size)
@@ -164,7 +180,7 @@ const char *loader_boot(uintptr_t dtb)
 	ba->physBase = p->phys_base;
 	ba->memSize = p->mem_size;
 	ba->topOfKernelData = top;
-	ba->Video.v_baseAddr = FB_BASE;
+	ba->Video.v_baseAddr = (uintptr_t)con_fb;	/* FB_BASE unless display.c followed the scanout */
 	ba->Video.v_display = 1;
 	ba->Video.v_rowBytes = FB_STRIDE;
 	ba->Video.v_width = FB_W;

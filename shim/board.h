@@ -24,6 +24,10 @@
  * pingpong 0x71000 + 0x800*n (6), intf 0x6b000 + 0x800*n (INTF_1 = DSI0),
  * sspp vig 0x5000/7000/9000/b000, dma 0x25000/27000/29000/2b000. */
 #define HAS_CMD_PANEL		1
+/* Refuse to start XNU unless its RAM range is inside a live /memory bank and
+ * clear of every reserved region (the range is chosen before the phone's
+ * memory node has been seen). */
+#define CHECK_RAM		1
 #define MDP_BASE		0x0ae00000UL
 #define MDP_CTL(n)		(MDP_BASE + 0x2000UL + 0x200UL * (n))
 #define MDP_NUM_CTL		6
@@ -40,6 +44,7 @@
 #define VTIMER_INTID		19	/* DT: <GIC_PPI 3 ...>, not the usual 27 */
 #define PTIMER_INTID		18	/* DT: <GIC_PPI 2 ...> */
 #define HAS_CMD_PANEL		0	/* video-mode panel: scans the buffer by itself */
+#define CHECK_RAM		0	/* range measured on the phone: report only */
 #endif
 
 #endif
