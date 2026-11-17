@@ -11,6 +11,9 @@
 #include "console.h"
 #include "fdt.h"
 #include "board.h"
+#if HAS_CMD_PANEL
+#include "display.h"
+#endif
 #include "loader.h"
 
 #define BOOT_LINE_LENGTH	608
@@ -76,6 +79,27 @@ static int magic_ok(const char *m)
 }
 
 typedef void (*xnu_entry_t)(uint64_t boot_args_pa);
+
+#if HAS_CMD_PANEL
+/* Append key + 8 hex digits (value < 4 GiB) to the boot-args; 0 if full. */
+static int append_hex_arg(volatile char *line, const char *key, unsigned long long v)
+{
+	int n = 0, k = 0;
+	char buf[32];
+	while (n < BOOT_LINE_LENGTH && line[n])
+		n++;
+	for (; key[k] && k < 20; k++)
+		buf[k] = key[k];
+	for (int sh = 28; sh >= 0; sh -= 4)
+		buf[k++] = "0123456789abcdef"[(v >> sh) & 0xf];
+	if (n + k >= BOOT_LINE_LENGTH)
+		return 0;
+	for (int i = 0; i < k; i++)
+		line[n + i] = buf[i];
+	line[n + k] = 0;
+	return 1;
+}
+#endif
 
 /*
  * Find the payload in the ramdisk ABL handed us. With a boot image v0-v2 it is
@@ -190,6 +214,21 @@ const char *loader_boot(uintptr_t dtb)
 	ba->deviceTreeLength = (uint32_t)p->adt_size;
 	for (int i = 0; i < BOOT_LINE_LENGTH; i++)
 		ba->CommandLine[i] = p->cmdline[i];
+#if HAS_CMD_PANEL
+	/* Command-mode panel without autorefresh: XNU must send the frames
+	 * (patch 0085). If the console moved to the buffer the panel scans,
+	 * XNU's console follows it. */
+	unsigned long long kick = disp_kick_pa();
+	if (kick) {
+		if (append_hex_arg(ba->CommandLine, " sweetkick=0x", kick))
+			con_hex("KICK", kick);
+		else
+			con_str("KICK", "boot-args full: no sweetkick");
+	}
+	if ((uintptr_t)con_fb != FB_BASE &&
+	    !append_hex_arg(ba->CommandLine, " sweetfbpa=0x", (uintptr_t)con_fb))
+		con_str("FBPA", "boot-args full: no sweetfbpa");
+#endif
 	ba->memSizeActual = p->mem_size;
 	con_hex2("BOOTARG", "pa=", ba_pa, "top=", top);
 

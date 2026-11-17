@@ -3,3 +3,4 @@
 const char *disp_init(void);		/* call before drawing; returns the mode */
 void disp_present(void);		/* after drawing: send a frame if needed */
 void disp_report(const char *mode);	/* print what ABL left in the display path */
+unsigned long long disp_kick_pa(void);	/* CTL_START address if XNU must kick, else 0 */

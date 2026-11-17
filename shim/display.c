@@ -124,6 +124,13 @@ static void follow_scanout(void)
 		con_fb = (volatile uint32_t *)(uintptr_t)found;
 }
 
+/* Physical address of CTL_START when frames need kicks (0 otherwise): the
+ * loader passes it to XNU as sweetkick= (patch 0085 kicks on a timer). */
+unsigned long long disp_kick_pa(void)
+{
+	return (ctl >= 0 && !autorefresh) ? MDP_CTL(ctl) + CTL_START : 0;
+}
+
 const char *disp_init(void)
 {
 	follow_scanout();
@@ -214,6 +221,7 @@ void disp_report(const char *mode)
 
 #else	/* video-mode panel */
 
+unsigned long long disp_kick_pa(void) { return 0; }
 const char *disp_init(void) { return "video mode"; }
 void disp_present(void) {}
 void disp_report(const char *mode) { (void)mode; }

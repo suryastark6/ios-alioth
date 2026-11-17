@@ -1,0 +1,110 @@
+--- a/pexpert/arm/pe_serial.c
++++ b/pexpert/arm/pe_serial.c
+@@ -29,6 +29,8 @@
+ #include <arm64/sweet_early.h>
+ #include <pexpert/arm/protos.h>
+ #include <kern/sched_prim.h>
++#include <kern/startup.h>
++#include <kern/thread_call.h>
+ #if HIBERNATION
+ #include <machine/pal_hibernate.h>
+ #endif /* HIBERNATION */
+@@ -718,6 +720,35 @@
+ #define FBCON_BG        0xff000000u
+ 
+ static volatile uint32_t *fbcon_base;
++
++/*
++ * Command-mode panels (alioth): the panel only shows a new image when the
++ * display controller sends a frame. The shim turns on autorefresh; when that
++ * does not take, it passes sweetkick=<CTL_START physical address>. Then a
++ * frame is sent after console lines (at most every ~20 ms, so panics show
++ * too) and, from EARLY_BOOT on, 30 times a second for everything else.
++ */
++static volatile uint32_t *fbcon_kick;
++static uint64_t fbcon_kick_last;
++#define FBCON_KICK_GAP  (19200000 / 50)    /* ticks at 19.2 MHz: 20 ms */
++
++static void
++fbcon_kick_now(void)
++{
++	if (fbcon_kick != NULL) {
++		__builtin_arm_dsb(0xf);    /* framebuffer writes land before the fetch */
++		*fbcon_kick = 1;
++		fbcon_kick_last = ml_get_timebase();
++	}
++}
++
++static void
++fbcon_kick_soon(void)
++{
++	if (fbcon_kick != NULL && ml_get_timebase() - fbcon_kick_last >= FBCON_KICK_GAP) {
++		fbcon_kick_now();
++	}
++}
+ static uint32_t fbcon_width, fbcon_height, fbcon_stride;
+ static uint32_t fbcon_cols, fbcon_rows, fbcon_col, fbcon_row;
+ 
+@@ -739,6 +770,7 @@
+ 	fbcon_row = (fbcon_row + 1) % fbcon_rows;
+ 	fbcon_clear_row(fbcon_row);
+ 	fbcon_clear_row((fbcon_row + 1) % fbcon_rows);
++	fbcon_kick_soon();
+ }
+ 
+ static void
+@@ -834,14 +866,53 @@
+ 	if (!fbcon_width || !fbcon_height || fbcon_stride < fbcon_width * 4) {
+ 		return;
+ 	}
++	/* sweetfbpa=: the shim found the panel scanning another buffer. */
++	uint64_t fb_pa = reg[0];
++	uint64_t fb_override = 0;
++	if (PE_parse_boot_argn("sweetfbpa", &fb_override, sizeof(fb_override)) && fb_override) {
++		fb_pa = fb_override;
++	}
+ 	sweet_early_mark(17, "fbcon config read; mapping");
+-	fbcon_base = (volatile uint32_t *)ml_io_map_wcomb(reg[0], reg[1]);
++	fbcon_base = (volatile uint32_t *)ml_io_map_wcomb(fb_pa, reg[1]);
+ 	sweet_early_mark(18, "fbcon mapping returned");
++	uint64_t kick_pa = 0;
++	if (PE_parse_boot_argn("sweetkick", &kick_pa, sizeof(kick_pa)) && kick_pa && !(kick_pa & 3)) {
++		vm_offset_t page = ml_io_map(kick_pa & ~(uint64_t)PAGE_MASK, PAGE_SIZE);
++		if (page) {
++			fbcon_kick = (volatile uint32_t *)(page + (kick_pa & PAGE_MASK));
++		}
++	}
+ 	if (fbcon_base != NULL) {
+ 		register_serial_functions(&sweet_fbcon_serial_functions);
+ 	}
+ }
+ 
++static thread_call_t fbcon_kick_call;
++
++static void
++fbcon_kick_tick(thread_call_param_t p0 __unused, thread_call_param_t p1 __unused)
++{
++	uint64_t deadline;
++	fbcon_kick_now();
++	clock_interval_to_deadline(33, NSEC_PER_MSEC, &deadline);
++	thread_call_enter_delayed(fbcon_kick_call, deadline);
++}
++
++static void
++fbcon_kick_start(void)
++{
++	if (fbcon_kick == NULL) {
++		return;
++	}
++	fbcon_kick_call = thread_call_allocate_with_options(fbcon_kick_tick, NULL,
++	    THREAD_CALL_PRIORITY_KERNEL, THREAD_CALL_OPTIONS_ONCE);
++	if (fbcon_kick_call != NULL) {
++		kprintf("SWEET FBCON: command-mode panel, sending frames at 30 Hz\n");
++		fbcon_kick_tick(NULL, NULL);
++	}
++}
++STARTUP(EARLY_BOOT, STARTUP_RANK_MIDDLE, fbcon_kick_start);
++
+ #if HIBERNATION
+ /**
+  * Transitions the serial driver into a mode that can be run in the hibernation
