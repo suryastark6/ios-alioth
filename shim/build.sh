@@ -2,13 +2,19 @@
 # Build the shim and wrap it in a boot.img v2 that mirrors the stock PixelOS header.
 #   BOARD=sweet|alioth (default sweet) selects the addresses in board.h.
 #   DTB=path (default ../dtb/boot_unpacked/dtb): the phone's stock DTB from
-#   tools/unpack_bootv2.py; ABL needs the DTB it expects for this phone.
+#   tools/unpack_bootv2.py or tools/unpack_vendor_boot.py; ABL needs the DTB
+#   it expects for this phone.
+#   HEADER=2|3 (default 2): boot image header version. 3 = no DTB in the
+#   image; ABL uses the phone's vendor_boot (Virtual A/B phones like alioth).
 set -euo pipefail
 cd "$(dirname "$0")"
 CC=aarch64-linux-gnu-gcc
 OBJCOPY=aarch64-linux-gnu-objcopy
 BOARD=${BOARD:-sweet}
 DTB=${DTB:-../dtb/boot_unpacked/dtb}
+HEADER=${HEADER:-2}	# 3: boot image v3, DTB from the phone's vendor_boot (alioth)
+case "$HEADER" in 2|3) ;; *) echo "error: HEADER=$HEADER (2 or 3)" >&2; exit 1 ;; esac
+if [ "$HEADER" = 2 ] && [ ! -f "$DTB" ]; then echo "error: DTB=$DTB not found" >&2; exit 1; fi
 case "$BOARD" in
 	sweet) BOARD_DEF= ;;
 	alioth) BOARD_DEF=-DBOARD_ALIOTH ;;
@@ -36,11 +42,19 @@ if [ -n "${1:-}" ]; then
 else
 	(cd out && rm -rf rd && mkdir rd && cd rd && find . | cpio -o -H newc --quiet | gzip -9 > ../ramdisk.bin)
 fi
-mkbootimg --header_version 2 --kernel out/Image --ramdisk out/ramdisk.bin \
-	--dtb "$DTB" --base 0 --kernel_offset 0x8000 --ramdisk_offset 0x1000000 \
-	--tags_offset 0x100 --dtb_offset 0x1f00000 --pagesize 4096 \
-	--os_version 17.0.0 --os_patch_level 2035-06 \
-	--cmdline "console=null" -o out/shim-boot.img
+if [ "$HEADER" = 3 ]; then
+	# v3: no DTB here; ABL takes it (and the vendor ramdisk, placed before
+	# ours) from the phone's own vendor_boot. loader.c finds the payload.
+	mkbootimg --header_version 3 --kernel out/Image --ramdisk out/ramdisk.bin \
+		--os_version 17.0.0 --os_patch_level 2035-06 \
+		--cmdline "console=null" -o out/shim-boot.img
+else
+	mkbootimg --header_version 2 --kernel out/Image --ramdisk out/ramdisk.bin \
+		--dtb "$DTB" --base 0 --kernel_offset 0x8000 --ramdisk_offset 0x1000000 \
+		--tags_offset 0x100 --dtb_offset 0x1f00000 --pagesize 4096 \
+		--os_version 17.0.0 --os_patch_level 2035-06 \
+		--cmdline "console=null" -o out/shim-boot.img
+fi
 # Host render of the console layout.
 gcc -O1 -Wall -o out/host_test console.c host_test.c && ./out/host_test
 ls -l out/Image out/shim-boot.img

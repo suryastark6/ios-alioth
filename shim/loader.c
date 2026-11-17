@@ -76,6 +76,42 @@ static int magic_ok(const char *m)
 
 typedef void (*xnu_entry_t)(uint64_t boot_args_pa);
 
+/*
+ * Find the payload in the ramdisk ABL handed us. With a boot image v0-v2 it is
+ * the whole ramdisk. With v3/v4 (alioth: boot + vendor_boot), ABL places the
+ * vendor ramdisk first and ours right behind it, at whatever byte offset the
+ * vendor ramdisk's size gives. The MMU is off, so every access is Device
+ * memory and must be aligned: if the payload is not 8-byte aligned, move it
+ * down to an aligned address first (only the vendor ramdisk is overwritten).
+ * Returns 0 if there is no payload.
+ */
+static uintptr_t payload_locate(uintptr_t lo, uintptr_t hi)
+{
+	if (hi < lo + 8)
+		return 0;
+	uintptr_t at = 0;
+	if (!(lo & 7) && magic_ok((const char *)lo))
+		return lo;
+	for (uintptr_t a = lo; a + 8 <= hi; a++) {
+		volatile const uint8_t *m = (volatile const uint8_t *)a;
+		if (m[0] == 'S' && m[1] == 'W' && m[2] == 'E' && m[3] == 'E' &&
+		    m[4] == 'T' && m[5] == 'X' && m[6] == 'N' && m[7] == 'U') {
+			at = a;
+			break;
+		}
+	}
+	if (!at || !(at & 7))
+		return at;
+	uintptr_t dst = at & ~(uintptr_t)7;
+	if (dst < lo)
+		return 0;
+	volatile uint8_t *d = (volatile uint8_t *)dst;
+	volatile const uint8_t *src = (volatile const uint8_t *)at;
+	for (uintptr_t i = 0, n = hi - at; i < n; i++)	/* dst < src: forward copy is safe */
+		d[i] = src[i];
+	return dst;
+}
+
 const char *loader_boot(uintptr_t dtb)
 {
 	uint64_t rd_start, rd_end;
@@ -85,9 +121,14 @@ const char *loader_boot(uintptr_t dtb)
 		return "no initrd in /chosen";
 	con_hex2("INITRD", "lo=", rd_start, "hi=", rd_end);
 
-	const struct payload *p = (const struct payload *)rd_start;
-	if (!magic_ok(p->magic))
+	uintptr_t found = payload_locate(rd_start, rd_end);
+	if (!found)
 		return "no SWEETXNU payload";
+	if (found != rd_start) {
+		con_hex2("PAYLOAD", "at=", found, "skip=", found - rd_start);
+		rd_start = found;
+	}
+	const struct payload *p = (const struct payload *)rd_start;
 	if (p->version != 1 || (p->adt_off & 7) || (rd_start & 7))
 		return "bad payload header";
 
