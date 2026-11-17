@@ -1,0 +1,97 @@
+--- a/bsd/dev/sweet_ufs.c
++++ b/bsd/dev/sweet_ufs.c
+@@ -583,6 +583,37 @@
+ 	.d_type       = D_DISK,
+ };
+ 
++/*
++ * Board check: the ADT root "compatible" lists xiaomi,alioth on the POCO F3
++ * (tools/boards/alioth.py). sweet-only drivers must not run there.
++ */
++static bool
++sweet_board_is(const char *want)
++{
++	DTEntry root;
++	void const *prop;
++	unsigned int size;
++	if (SecureDTLookupEntry(NULL, "/", &root) != kSuccess ||
++	    SecureDTGetProperty(root, "compatible", &prop, &size) != kSuccess) {
++		return false;
++	}
++	const char *c = (const char *)prop;
++	unsigned int start = 0;
++	for (unsigned int i = 0; i <= size; i++) {
++		if (i == size || c[i] == 0) {
++			unsigned int k = 0;
++			while (start + k < i && want[k] && c[start + k] == want[k]) {
++				k++;
++			}
++			if (start + k == i && want[k] == 0) {
++				return true;
++			}
++			start = i + 1;
++		}
++	}
++	return false;
++}
++
+ static int
+ sweet_ufs_init(void)
+ {
+@@ -618,13 +649,16 @@
+ 		return ENOMEM;
+ 	}
+ 	su.dma_pa = ptoa_64(pn);
+-	su.lun = 0;
++	/* ufslun=N: the LUN holding the partition (default 0, as on sweet). */
++	uint32_t lun = 0;
++	bool lun_set = PE_parse_boot_argn("ufslun", &lun, sizeof(lun));
++	su.lun = (uint8_t)lun;
+ 	su.secsize = DEV_BSIZE;
+ 
+ 	lck_mtx_lock(&sweet_ufs_lock);
+ 	error = ufs_take_over_host();
++	static const uint8_t tur[6] = { 0x00 };
+ 	if (!error) {
+-		static const uint8_t tur[6] = { 0x00 };
+ 		/* The first command after the bootloader may report a unit attention. */
+ 		for (int i = 0; i < 3 && (error = ufs_scsi(tur, sizeof(tur), 0, false)); i++) {
+ 		}
+@@ -632,6 +666,16 @@
+ 	if (!error) {
+ 		error = ufs_find_partition(want);
+ 	}
++	/* Qualcomm phones keep userdata on LUN 0; look on 1-3 before giving up. */
++	for (uint8_t l = 1; error && !lun_set && l < 4; l++) {
++		su.lun = l;
++		printf("SWEET UFS: trying LUN %u\n", l);
++		for (int i = 0; i < 3 && (error = ufs_scsi(tur, sizeof(tur), 0, false)); i++) {
++		}
++		if (!error) {
++			error = ufs_find_partition(want);
++		}
++	}
+ 	lck_mtx_unlock(&sweet_ufs_lock);
+ 	if (error) {
+ 		return error;
+@@ -658,8 +702,18 @@
+ 	sweet_sample_start();
+ 	/* Input drivers (HID services in iokit/Kernel/arm/hid/SweetHID.cpp). */
+ 	sweet_keys_init();
+-	sweet_touch_init();
+-	sweet_usb_probe();
++	if (sweet_board_is("xiaomi,alioth")) {
++		/*
++		 * sweet's touch driver (Goodix on GENI I2C, TLMM at 0x03900000)
++		 * votes LDO11C to 3.2 V, which powers something else on alioth,
++		 * and the USB driver programs sweet's QUSB2 PHY, which SM8250
++		 * does not have. Neither may run here.
++		 */
++		printf("SWEET: alioth: sweet touch and USB drivers not started\n");
++	} else {
++		sweet_touch_init();
++		sweet_usb_probe();
++	}
+ 	return 0;
+ }
+ 
