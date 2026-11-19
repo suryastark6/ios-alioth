@@ -209,6 +209,7 @@ Problems found by reading the code and sources, and fixed before any boot:
 - **Result: the iOS 16 lock screen.** The wallpaper, the clock ("Wednesday, December 31", 4:03: the RTC is not read, so the clock starts at the epoch in local time), the charging battery icon, the camera button and the home indicator are all shown (`photos/boot14-m5-lockscreen.jpg`). MobileGestalt gets its Wi-Fi address, so LaunchServices seeding finishes and SpringBoard comes up.
 - Touch does not respond: expected, the FT3658U long reads still fail the CRC check (err=94, boots 10-11).
 - Next: fix the touch reads (kernel change, needs a CI kernel build). Later: RTC/time, the bluetoothd and fairplayd crash loops.
+- Touch fix written (patch 0087): every failing read was the 62-byte report (71-byte transfer, 18 FIFO words, more than the 16-word RX FIFO), every passing one a 10-byte transfer. Reports now read 5 points by default (`sweettouchpts`, 41 bytes + 3 spare, 11 words). The CRC is also searched at data offsets -3..+3 and kept if found, the first 4 bad frames are printed in full with both CRCs, and `sweettouchcrc=0` skips the check. CRC logic host-tested (aligned, one byte late, corrupted, skipped).
 
 ### 2026-11-19  boot 13: M5, logging lsd's IOKit calls
 - Image: `out/new/alioth-m5-v3-cpus4-noconsole-iolsd.img` (sha256 `a3c7bc91...`): boot 12 + `sweetiolog=lsd,backboardd`. Cold start, `fastboot boot` at 18:51:33, Apple logo, Power + Volume Down 18:58, log `logs/boot13-m5.txt`.

@@ -36,6 +36,7 @@ Hardware facts with sources: [docs/ALIOTH-HARDWARE.md](docs/ALIOTH-HARDWARE.md).
 - `tools/build-alioth.sh m1|m3|m5 [KERNEL]`: one command per milestone test image, boot header v3 (default) or v2.
 - `xnu/patches/0085`: when the panel's autorefresh does not start, XNU sends the frames itself (`sweetkick=`, passed by the shim).
 - `xnu/patches/0086`: FocalTech FT3658U touch driver over GENI SPI, with RPMh votes for its two rails.
+- `xnu/patches/0087`: touch report reads that fit the SPI FIFO (`sweettouchpts`, default 5 fingers), CRC frame search and a dump of bad frames, `sweettouchcrc=0` to skip the check.
 - Kernel builds: every successful CI run publishes the kernel to the `kernel` branch, so it can be fetched without a GitHub login.
 - `xnu/patches/0084`: on alioth, sweet's touch driver (which would power sweet's touch rail, a different regulator here) and USB driver (sweet's PHY) stay off; `userdata` is found on any UFS LUN.
 

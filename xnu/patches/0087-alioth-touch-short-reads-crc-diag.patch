@@ -1,0 +1,151 @@
+--- a/bsd/dev/alioth_touch.c
++++ b/bsd/dev/alioth_touch.c
+@@ -115,6 +115,15 @@ static struct {
+ 	vm_offset_t se, gcc, north, south;
+ 	bool started, dead;
+ 	unsigned fifo_depth;
++	/* Report reads (boots 10-14: every 62-byte read failed the CRC while
++	 * 1-byte reads passed). points = touch slots read per report
++	 * (sweettouchpts, default 5: a 41-byte transfer, 11 FIFO words, inside
++	 * the 16-word RX FIFO and under the 14-word RFR mark like the short
++	 * reads). shift = data offset found by at_crc_search; dumps = bad
++	 * frames printed so far; nocrc = sweettouchcrc=0. */
++	unsigned points, dumps;
++	int shift;
++	bool nocrc;
+ 	uint32_t irq_status, active;
+ 	int x[AT_MAX], y[AT_MAX];
+ } at;
+@@ -407,12 +416,73 @@ at_crc16(const uint8_t *p, unsigned n)
+ 	return crc;
+ }
+ 
++static bool
++at_crc_ok(const uint8_t *rx, unsigned p, unsigned n, unsigned total)
++{
++	return p + n + 2u <= total &&
++	       at_crc16(rx + p, n) == (uint16_t)(rx[p + n] | (rx[p + n + 1] << 8));
++}
++
++/*
++ * Where the data starts: dp, or dp + at.shift once a shift has been seen.
++ * If neither checks out, try dp-3..dp+3 and keep a shift that does (bytes
++ * gained or lost in the FIFO path would move the frame). 0 = no match.
++ */
++static unsigned
++at_crc_find(const uint8_t *rx, unsigned dp, unsigned n, unsigned total)
++{
++	unsigned p = (unsigned)((int)dp + at.shift);
++	if (at_crc_ok(rx, p, n, total)) {
++		return p;
++	}
++	if (p != dp && at_crc_ok(rx, dp, n, total)) {
++		return dp;
++	}
++	for (int s = -3; s <= 3; ++s) {
++		p = (unsigned)((int)dp + s);
++		if (s && s != at.shift && at_crc_ok(rx, p, n, total)) {
++			if (n > 1) {
++				printf("ALIOTH TOUCH: CRC matches at data offset %+d (n=%u)\n", s, n);
++				at.shift = s;
++			}
++			return p;
++		}
++	}
++	return 0;
++}
++
++/* The first few bad frames, whole, with both CRCs (NOTES.md boot 14). */
++static void
++at_dump(uint8_t reg, const uint8_t *rx, unsigned dp, unsigned n, unsigned total)
++{
++	if (at.dumps >= 4) {
++		return;
++	}
++	++at.dumps;
++	printf("ALIOTH TOUCH: bad CRC reg=%#x n=%u calc=%04x got=%02x%02x irq=%#x\n",
++	    reg, n, at_crc16(rx + dp, n), rx[dp + n + 1], rx[dp + n], at.irq_status);
++	for (unsigned i = 0; i < total; i += 16) {
++		char line[16 * 3 + 1];
++		unsigned k = 0;
++		for (unsigned j = i; j < total && j < i + 16; ++j) {
++			static const char hex[] = "0123456789abcdef";
++			line[k++] = hex[rx[j] >> 4];
++			line[k++] = hex[rx[j] & 15];
++			line[k++] = ' ';
++		}
++		line[k] = 0;
++		printf("ALIOTH TOUCH: rx %02u: %s\n", i, line);
++	}
++}
++
+ /* focaltech_spi.c fts_read: [reg, 0xa0, len, 3 dummy] then len data + crc. */
+ static int
+ at_read(uint8_t reg, uint8_t *data, unsigned n)
+ {
+ 	uint8_t tx[FTS_XFER_MAX] = {0}, rx[FTS_XFER_MAX] = {0};
+-	unsigned dp = 4u + FTS_DUMMY, total = dp + n + 2u;
++	/* Report reads clock 3 bytes past the CRC so at_crc_find can see a
++	 * frame that arrives late; the header still asks for n bytes. */
++	unsigned dp = 4u + FTS_DUMMY, total = dp + n + 2u + (n > 1u ? 3u : 0u);
+ 	if (!n || total > FTS_XFER_MAX) {
+ 		return EINVAL;
+ 	}
+@@ -429,13 +499,19 @@ at_read(uint8_t reg, uint8_t *data, unsigned n)
+ 		}
+ 		if (rx[3] & 0xa0u) {
+ 			err = EBUSY;
+-		} else if (at_crc16(rx + dp, n) != (uint16_t)(rx[dp + n] | (rx[dp + n + 1] << 8))) {
+-			err = EBADMSG;
+ 		} else {
+-			for (unsigned i = 0; i < n; ++i) {
+-				data[i] = rx[dp + i];
++			unsigned at_dp = at_crc_find(rx, dp, n, total);
++			if (at_dp || at.nocrc) {
++				if (!at_dp) {
++					at_dp = dp;
++				}
++				for (unsigned i = 0; i < n; ++i) {
++					data[i] = rx[at_dp + i];
++				}
++				return 0;
+ 			}
+-			return 0;
++			at_dump(reg, rx, dp, n, total);
++			err = EBADMSG;
+ 		}
+ 		delay(150);     /* CS_HIGH_DELAY in the vendor driver */
+ 	}
+@@ -467,7 +543,7 @@ at_poll(void)
+ 	uint8_t d[FTS_POINTS_LEN];
+ 	int x[AT_MAX] = {0}, y[AT_MAX] = {0};
+ 	uint32_t mask = 0, seen = 0;
+-	int err = at_read(0x01, d, sizeof(d));
++	int err = at_read(0x01, d, 2u + 6u * at.points);
+ 	if (err) {
+ 		return err;
+ 	}
+@@ -478,7 +554,7 @@ at_poll(void)
+ 	if (n > AT_MAX) {
+ 		return EIO;
+ 	}
+-	for (unsigned i = 0; i < AT_MAX; ++i) {
++	for (unsigned i = 0; i < at.points; ++i) {
+ 		const uint8_t *p = d + 2u + 6u * i;   /* vendor buf[3 + 6i] */
+ 		unsigned id = p[2] >> 4, event = p[0] >> 6;
+ 		if (id >= AT_MAX) {
+@@ -511,7 +587,14 @@ at_thread(void *arg, wait_result_t result)
+ 	unsigned delay_s = 45, clk_sel = 0, clk_div = 20;
+ 	(void)arg;
+ 	(void)result;
++	unsigned points = 5, crc = 1;
+ 	(void)PE_parse_boot_argn("sweettouchdelay", &delay_s, sizeof(delay_s));
++	(void)PE_parse_boot_argn("sweettouchpts", &points, sizeof(points));
++	(void)PE_parse_boot_argn("sweettouchcrc", &crc, sizeof(crc));
++	at.points = (points >= 1 && points <= AT_MAX) ? points : 5;
++	at.nocrc = !crc;
++	printf("ALIOTH TOUCH: %u points per report, CRC %s\n", at.points,
++	    at.nocrc ? "ignored (sweettouchcrc=0)" : "checked");
+ 	printf("ALIOTH TOUCH: FT3658U on SPI, starting in %u s\n", delay_s);
+ 	at_wait(delay_s * 1000u);
+ 	at.gcc = ml_io_map(AT_GCC_PA, 0x60000);
