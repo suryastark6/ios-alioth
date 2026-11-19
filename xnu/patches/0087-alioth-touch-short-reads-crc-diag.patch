@@ -236,15 +236,73 @@
  	printf("ALIOTH TOUCH: FT3658U on SPI, starting in %u s\n", delay_s);
  	at_wait(delay_s * 1000u);
  	at.gcc = ml_io_map(AT_GCC_PA, 0x60000);
-@@ -570,6 +734,11 @@ at_thread(void *arg, wait_result_t result)
+@@ -570,25 +734,62 @@ at_thread(void *arg, wait_result_t result)
  		printf("ALIOTH TOUCH: FT3658U (56:52) not found; stopping\n");
  		goto out;
  	}
-+	unsigned probe = 1;
+-	printf("ALIOTH TOUCH: FT3658U ready, 1080x2400, poll 10 ms\n");
+-	unsigned errors = 0, ticks = 0;
++	unsigned probe = 0;
 +	(void)PE_parse_boot_argn("sweettouchprobe", &probe, sizeof(probe));
 +	if (probe) {
 +		at_probe(clk_div);
 +	}
- 	printf("ALIOTH TOUCH: FT3658U ready, 1080x2400, poll 10 ms\n");
- 	unsigned errors = 0, ticks = 0;
++	/*
++	 * The IC only hands out a report right after it pulses INT (gpio39,
++	 * falling edge, IRQF_TRIGGER_FALLING in the vendor driver); read at any
++	 * other time and every byte is the 0x01 filler (boots 15-16; the
++	 * vendor's fts_dump_reg in OrangeFox shows the same filler while touch
++	 * works there). Latch the edge in TLMM: INTR_CFG raw status on, falling
++	 * edge, not routed to the GIC (enable bit 0 stays clear); INTR_STATUS
++	 * bit 0 holds it until cleared.
++	 */
++	vm_offset_t ig = at_gpio_base(AT_GPIO_IRQ);
++	at_wr(ig, 8u, (at_rd(ig, 8u) & ~0x1fu) | (1u << 4) | (2u << 2) | (1u << 1));
++	at_wr(ig, 0xcu, 0);
++	printf("ALIOTH TOUCH: FT3658U ready, 1080x2400, INT edge latch cfg=%#x\n", at_rd(ig, 8u));
++	unsigned errors = 0, ticks = 0, edges = 0, good = 0, bad = 0, stats = 0, quiet = 0;
  	while (!at.dead) {
+-		/* INT (gpio39, level low in the DT) is low while a report waits;
+-		 * read then, while touched, and every 100 ms regardless. */
+-		if (at.active || !at_gpio_in(AT_GPIO_IRQ) || (++ticks % 10u) == 0) {
++		++ticks;
++		bool edge = at_rd(ig, 0xcu) & 1u;
++		if (edge) {
++			at_wr(ig, 0xcu, 0);
++			if (!edges++) {
++				at.dumps = 0;   /* dump the first edge-triggered frames */
++				printf("ALIOTH TOUCH: first INT edge\n");
++			}
++		}
++		/* On an edge. Until the first edge is seen (in case the latch
++		 * does not work), also while INT is low and once a second. A
++		 * touch with no edge for 300 ms is lifted. */
++		quiet = edge ? 0 : quiet + 1;
++		if (at.active && quiet == 300u) {
++			at_report(0, at.x, at.y);
++		}
++		if (edge || (!edges && (!at_gpio_in(AT_GPIO_IRQ) || (ticks % 1000u) == 0))) {
+ 			int err = at_poll();
+ 			if (err) {
++				++bad;
+ 				if ((errors++ % 100u) == 0) {
+-					printf("ALIOTH TOUCH: report err=%d irq=%#x\n", err, at.irq_status);
++					printf("ALIOTH TOUCH: report err=%d irq=%#x edges=%u\n", err, at.irq_status, edges);
+ 				}
+ 				if (errors == 10) {
+ 					at_report(0, at.x, at.y);
+ 				}
+ 			} else {
++				++good;
+ 				errors = 0;
+ 			}
+ 		}
+-		at_wait(10);
++		if (edges && stats < 30 && (ticks % 10000u) == 0) {
++			++stats;
++			printf("ALIOTH TOUCH: edges=%u reports ok=%u bad=%u\n", edges, good, bad);
++		}
++		at_wait(1);
+ 	}
+ 	at_report(0, at.x, at.y);
+ out:
