@@ -17,6 +17,8 @@
  *   - a kick per frame: CTL_START = 1 on the active CTL (what the driver's
  *     trigger_start does in command mode).
  * disp_init() reports what ABL left, turns autorefresh on and kicks once.
+ * Without a tear-check pingpong (the test phone's replacement LCD, which
+ * shows the buffer by itself and blanks on a kick), it writes nothing.
  * disp_present() kicks again when autorefresh did not take.
  *
  * Only register reads, the autorefresh register of the pingpong ABL already
@@ -73,6 +75,7 @@ static int no_writes;		/* DISP_TEST_NONE */
 static int pp = -1;		/* pingpong with tear check on */
 static int autorefresh;		/* 1: frames flow without kicks */
 static uint64_t last_kick;
+static uint32_t intf_f0, intf_f1;	/* INTF_1 frame count 100 ms apart */
 
 static inline uint32_t rd(uintptr_t a) { return *(volatile uint32_t *)a; }
 static inline void wr(uintptr_t a, uint32_t v) { *(volatile uint32_t *)a = v; }
@@ -165,15 +168,25 @@ const char *disp_init(void)
 	return "test kick: no autorefresh";
 #endif
 
-	/* Without a pingpong in tear-check mode, per-frame kicks are the only way. */
-	if (pp >= 0) {
-		uint32_t ar = rd(MDP_PP(pp) + PP_AUTOREFRESH_CONFIG);
-		if (!(ar & AUTOREFRESH_EN))
-			wr(MDP_PP(pp) + PP_AUTOREFRESH_CONFIG, AUTOREFRESH_EN | AUTOREFRESH_EVERY);
+	/*
+	 * No pingpong in tear-check mode: on the test phone's aftermarket LCD the
+	 * splash buffer shows up with no writes at all (NOTES.md boot 03), and any
+	 * CTL_START kick blanks it (boots 01, 02, 04). Boot 04 also showed that
+	 * INTF_1's frame counter does not tell this case apart, so it is only
+	 * sampled for the screen. Write nothing.
+	 */
+	if (pp < 0) {
+		intf_f0 = rd(MDP_INTF(INTF_DSI0) + INTF_FRAME_COUNT);
+		wait_ms(100);		/* 6 frames at 60 Hz */
+		intf_f1 = rd(MDP_INTF(INTF_DSI0) + INTF_FRAME_COUNT);
+		no_writes = 1;
+		return "no tear check: no writes";
 	}
+
+	uint32_t ar = rd(MDP_PP(pp) + PP_AUTOREFRESH_CONFIG);
+	if (!(ar & AUTOREFRESH_EN))
+		wr(MDP_PP(pp) + PP_AUTOREFRESH_CONFIG, AUTOREFRESH_EN | AUTOREFRESH_EVERY);
 	kick();
-	if (pp < 0)
-		return "kick mode (no tear-check pingpong)";
 
 		/*
 	 * Autorefresh works if frames keep going out with no further kicks: the
@@ -227,6 +240,8 @@ void disp_report(const char *mode)
 	}
 	con_hex2("INTF1", "frames=", rd(MDP_INTF(INTF_DSI0) + INTF_FRAME_COUNT),
 		 "status=", rd(MDP_INTF(INTF_DSI0) + INTF_STATUS));
+	if (intf_f0 | intf_f1)
+		con_hex2("INTF1", "f0=", intf_f0, "f+100ms=", intf_f1);
 	/* Which pipe fetches the splash buffer, and in what layout. The console
 	 * assumes a8r8g8b8 with a 4320-byte stride at FB_BASE. */
 	for (unsigned i = 0; i < sizeof(sspp_off) / sizeof(sspp_off[0]); i++) {

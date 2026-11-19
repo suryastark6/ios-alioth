@@ -56,4 +56,8 @@ BOARD = {
     # read by sweet_rpmh.c (patch 0086) to vote the touch rails.
     'rpmh_cmd_db': (0x80860000, 0x20000),
     'ecid': 0x414c494f54480001,  # 'ALIOTH' + 1, synthetic (not the phone's)
+    # /arm-io/wlan and /arm-io/bluetooth with synthetic MAC addresses
+    # (tools/mkadt.py radio_nodes): MobileGestalt waits forever for a Wi-Fi
+    # address otherwise and the first boot never leaves the Apple logo.
+    'radio_nodes': True,
 }

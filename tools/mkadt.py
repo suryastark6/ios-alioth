@@ -60,6 +60,21 @@ def node(name, props=(), children=()):
     return n
 
 
+def radio_nodes(b, ph):
+    """/arm-io/wlan and /arm-io/bluetooth with local-mac-address, for boards
+    that need them (alioth, NOTES.md boots 12-13). Without a wlan nub,
+    MobileGestalt's WifiAddress lookup (IONameMatch sdio / wlan /
+    marconi-wifi, then an IONetworkController notification) waits forever
+    when lsd seeds the LaunchServices database (_GenerateBuiltInAppInstallSessionID),
+    so SpringBoard never leaves the Apple logo. The addresses are synthetic,
+    locally administered (0x02 prefix), not the phone's."""
+    if not b.get('radio_nodes'):
+        return []
+    tag = b['ecid'].to_bytes(8, 'big')[-3:]
+    return [node('wlan', [ph(), ('local-mac-address', b'\x02\x00\x01' + tag)]),
+            node('bluetooth', [ph(), ('local-mac-address', b'\x02\x00\x02' + tag)])]
+
+
 def build(seed=None, qemu=False, highmem=False, board='sweet'):
     """qemu=True: same tree, but with QEMU virt's GIC addresses and CNTFRQ (tools/qemu-sweet.py)."""
     b = boards.load(board) if isinstance(board, str) else board
@@ -180,7 +195,7 @@ def build(seed=None, qemu=False, highmem=False, board='sweet'):
             ('compatible', cstr('sweet,display')),
             ('canvas-width', u32(1125)),
             ('canvas-height', u32(2436)),
-        ])])
+        ])] + radio_nodes(b, ph))
 
     fbcon = node('sweet-fbcon', [
         ph(),
