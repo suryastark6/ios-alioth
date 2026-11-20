@@ -1,0 +1,67 @@
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -5568,6 +5568,40 @@ bad:
+  * Note:	The argument and environment vectors are user space pointers
+  *		to arrays of user space pointers.
+  */
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++/*
++ * alioth's GPU: backboardd is started with DYLD_INSERT_LIBRARIES=/usr/local/alioth/lib/libalioth.dylib,
++ * the loader that puts OpenGL ES on the Adreno behind EAGLContext (Mesa; NOTES.md, boots 26-28).
++ * launchd does not pass DYLD_* variables from a job description (boot 28: the job's own was
++ * dropped), so the kernel adds it here, as HakiOS does (xnu/hakios.patch, exec_inject_env; APSL 2.0).
++ * Only with the GPU kept for the system (boot-arg sweetgpu=1), unless boot-arg sweetgl says otherwise
++ * (sweetgl=0: never, sweetgl=1: also without sweetgpu). The loader itself does nothing when the
++ * kernel's AliothGPU service is not there.
++ */
++#define SWEET_GL_LOADER "DYLD_INSERT_LIBRARIES=/usr/local/alioth/lib/libalioth.dylib"
++
++static bool
++sweet_exec_gl_loader(struct image_params *imgp)
++{
++	static int wanted = -1;
++
++	if (wanted < 0) {
++		int gpu = 0, gl = -1;
++
++		(void)PE_parse_boot_argn("sweetgpu", &gpu, sizeof(gpu));
++		if (!PE_parse_boot_argn("sweetgl", &gl, sizeof(gl))) {
++			gl = gpu != 0;
++		}
++		wanted = gl != 0;
++	}
++	if (!wanted || imgp->ip_ndp == NULL) {
++		return false;
++	}
++	return imgp->ip_ndp->ni_cnd.cn_namelen == 10 &&
++	       strncmp(imgp->ip_ndp->ni_cnd.cn_nameptr, "backboardd", 10) == 0;
++}
++#endif /* ARM64_BOARD_CONFIG_SWEET */
++
+ __attribute__((noinline))
+ static int
+ exec_extract_strings(struct image_params *imgp)
+@@ -5741,6 +5775,23 @@ exec_extract_strings(struct image_params *imgp)
+ 		imgp->ip_envc++;
+ 	}
+ 
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++	/* one more variable for backboardd: the GPU's OpenGL ES loader (see sweet_exec_gl_loader) */
++	if (sweet_exec_gl_loader(imgp)) {
++		error = exec_add_user_string(imgp, CAST_USER_ADDR_T(SWEET_GL_LOADER), UIO_SYSSPACE, TRUE);
++		if (error) {
++			goto bad;
++		}
++		if (imgp->ip_argspace < new_ptr_size) {
++			error = E2BIG;
++			goto bad;
++		}
++		imgp->ip_argspace -= new_ptr_size;
++		imgp->ip_envc++;
++		printf("exec backboardd: %s\n", SWEET_GL_LOADER);
++	}
++#endif
++
+ 	/* Save space for envv[] NULL terminator */
+ 	if (imgp->ip_argspace < new_ptr_size) {
+ 		error = E2BIG;
