@@ -10,7 +10,7 @@
 +	 * the 16-word RX FIFO and under the 14-word RFR mark like the short
 +	 * reads). shift = data offset found by at_crc_search; dumps = bad
 +	 * frames printed so far; nocrc = sweettouchcrc=0. */
-+	unsigned points, dumps;
++	unsigned points, dumps, logged;
 +	int shift;
 +	bool nocrc;
  	uint32_t irq_status, active;
@@ -91,7 +91,19 @@
  	if (!n || total > FTS_XFER_MAX) {
  		return EINVAL;
  	}
-@@ -429,19 +499,106 @@ at_read(uint8_t reg, uint8_t *data, unsigned n)
+@@ -421,7 +491,10 @@ at_read(uint8_t reg, uint8_t *data, unsigned n)
+ 	tx[2] = (uint8_t)(n >> 8);
+ 	tx[3] = (uint8_t)n;
+ 	int err = EIO;
+-	for (unsigned attempt = 0; attempt < 3; ++attempt) {
++	/* Boot 17: the IC hands out a report once per INT edge; a retry of
++	 * register 0x01 gets the 0x01 filler, so a report read is tried once. */
++	unsigned attempts = reg == 0x01u ? 1u : 3u;
++	for (unsigned attempt = 0; attempt < attempts; ++attempt) {
+ 		err = at_xfer(tx, rx, total);
+ 		if (err) {
+ 			delay(150);
+@@ -429,19 +502,116 @@ at_read(uint8_t reg, uint8_t *data, unsigned n)
  		}
  		if (rx[3] & 0xa0u) {
  			err = EBUSY;
@@ -109,10 +121,20 @@
 +					data[i] = rx[at_dp + i];
 +				}
 +				return 0;
- 			}
--			return 0;
++			}
 +			at_dump(reg, rx, dp, n, total);
 +			err = EBADMSG;
++			if (reg == 0x01u) {
++				/* Boot 17: the edge frames held a real touch at dp
++				 * (1 point, x=625 y=2385, the swipe-up) yet the two
++				 * bytes after n were ff ff, not the CRC; the caller
++				 * checks the frame itself. */
++				for (unsigned i = 0; i < n; ++i) {
++					data[i] = rx[dp + i];
++				}
++				return EAGAIN;
+ 			}
+-			return 0;
  		}
  		delay(150);     /* CS_HIGH_DELAY in the vendor driver */
  	}
@@ -203,16 +225,33 @@
  static void
  at_report(uint32_t mask, const int *x, const int *y)
  {
-@@ -467,7 +624,7 @@ at_poll(void)
+@@ -467,18 +637,30 @@ at_poll(void)
  	uint8_t d[FTS_POINTS_LEN];
  	int x[AT_MAX] = {0}, y[AT_MAX] = {0};
  	uint32_t mask = 0, seen = 0;
 -	int err = at_read(0x01, d, sizeof(d));
+-	if (err) {
 +	int err = at_read(0x01, d, 2u + 6u * at.points);
- 	if (err) {
++	bool checked = !err;
++	if (err && err != EAGAIN) {
  		return err;
  	}
-@@ -478,7 +635,7 @@ at_poll(void)
+-	unsigned n = d[1] & 0x0fu;
++	if (!checked) {
++		/* No CRC: reject the filler (0x01 everywhere) and anything with
++		 * a bad count; the slot checks below do the rest. */
++		unsigned ones = 0;
++		for (unsigned i = 0; i < 8u; ++i) {
++			ones += d[i] == 0x01u;
++		}
++		if (ones == 8u || (d[1] >> 4) || (d[1] & 0x0fu) > at.points) {
++			return EBADMSG;
++		}
++	}
++	unsigned n = d[1] & 0x0fu, down = 0;
+ 	if (n == 0x0fu && d[1] == 0xffu && d[2] == 0xffu && d[3] == 0xffu) {
+ 		return EIO;     /* IC lost its state; vendor driver recovers it */
+ 	}
  	if (n > AT_MAX) {
  		return EIO;
  	}
@@ -221,7 +260,33 @@
  		const uint8_t *p = d + 2u + 6u * i;   /* vendor buf[3 + 6i] */
  		unsigned id = p[2] >> 4, event = p[0] >> 6;
  		if (id >= AT_MAX) {
-@@ -511,7 +668,14 @@ at_thread(void *arg, wait_result_t result)
+@@ -491,6 +673,7 @@ at_poll(void)
+ 		if (event == 1u) {
+ 			continue;   /* up */
+ 		}
++		++down;
+ 		unsigned rx8 = ((unsigned)(p[0] & 0x0fu) << 11) | ((unsigned)p[1] << 3) | ((p[4] & 0xe0u) >> 5);
+ 		unsigned ry8 = ((unsigned)(p[2] & 0x0fu) << 11) | ((unsigned)p[3] << 3) | ((p[4] & 0x1cu) >> 2);
+ 		unsigned px = rx8 / 8u, py = ry8 / 8u;
+@@ -501,8 +684,16 @@ at_poll(void)
+ 		x[id] = (int)px;
+ 		y[id] = (int)py;
+ 	}
++	if (!checked && down != n) {
++		return EBADMSG;
++	}
++	if (at.logged < 20u && mask != at.active) {
++		++at.logged;
++		printf("ALIOTH TOUCH: %s n=%u mask=%#x x=%d y=%d\n", checked ? "crc" : "nocrc",
++		    n, mask, x[0], y[0]);
++	}
+ 	at_report(mask, x, y);
+-	return 0;
++	return checked ? 0 : EAGAIN;
+ }
+ 
+ static void
+@@ -511,7 +702,14 @@ at_thread(void *arg, wait_result_t result)
  	unsigned delay_s = 45, clk_sel = 0, clk_div = 20;
  	(void)arg;
  	(void)result;
@@ -236,7 +301,7 @@
  	printf("ALIOTH TOUCH: FT3658U on SPI, starting in %u s\n", delay_s);
  	at_wait(delay_s * 1000u);
  	at.gcc = ml_io_map(AT_GCC_PA, 0x60000);
-@@ -570,25 +734,62 @@ at_thread(void *arg, wait_result_t result)
+@@ -570,25 +768,66 @@ at_thread(void *arg, wait_result_t result)
  		printf("ALIOTH TOUCH: FT3658U (56:52) not found; stopping\n");
  		goto out;
  	}
@@ -260,7 +325,7 @@
 +	at_wr(ig, 8u, (at_rd(ig, 8u) & ~0x1fu) | (1u << 4) | (2u << 2) | (1u << 1));
 +	at_wr(ig, 0xcu, 0);
 +	printf("ALIOTH TOUCH: FT3658U ready, 1080x2400, INT edge latch cfg=%#x\n", at_rd(ig, 8u));
-+	unsigned errors = 0, ticks = 0, edges = 0, good = 0, bad = 0, stats = 0, quiet = 0;
++	unsigned errors = 0, ticks = 0, edges = 0, good = 0, bad = 0, unchecked = 0, stats = 0, quiet = 0;
  	while (!at.dead) {
 -		/* INT (gpio39, level low in the DT) is low while a report waits;
 -		 * read then, while touched, and every 100 ms regardless. */
@@ -283,6 +348,10 @@
 +		}
 +		if (edge || (!edges && (!at_gpio_in(AT_GPIO_IRQ) || (ticks % 1000u) == 0))) {
  			int err = at_poll();
++			if (err == EAGAIN) {
++				++unchecked;
++				err = 0;
++			}
  			if (err) {
 +				++bad;
  				if ((errors++ % 100u) == 0) {
@@ -300,7 +369,7 @@
 -		at_wait(10);
 +		if (edges && stats < 30 && (ticks % 10000u) == 0) {
 +			++stats;
-+			printf("ALIOTH TOUCH: edges=%u reports ok=%u bad=%u\n", edges, good, bad);
++			printf("ALIOTH TOUCH: edges=%u reports ok=%u (no crc %u) bad=%u\n", edges, good, unchecked, bad);
 +		}
 +		at_wait(1);
  	}

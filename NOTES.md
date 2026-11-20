@@ -204,6 +204,29 @@ Problems found by reading the code and sources, and fixed before any boot:
 
 ## Boot log
 
+### 2026-11-20  boot 18: M5, touch works
+- Image: `out/new/alioth-m5-v3-cpus4-noconsole-touch4.img` (sha256 `a4608cd3...`): kernel `7b20dc41...` (touch-test `4c2be33`, patch 0087 fourth version), wlan ADT. Power-off from OrangeFox, cold start, `fastboot boot` at 06:35:03, log `logs/boot18-m5.txt`. Build kept in `builds/boot18-touch/`.
+- **Result: touch works.** Unlocking, opening apps (Phone) and swiping all respond. The driver accepted 3475 of 3476 edge reports (none had a valid CRC; all passed the frame check), and the logged points match the gestures (swipe up from y=2397, taps around the screen, the corners at 79,33 and 1078,123).
+- Everything is slow: animations stutter, rendering glitches, the wallpaper is black, widgets stay on "waiting", apps take a long time to open and the Phone app shows a blank screen. Expected for now: no GPU (all drawing in software, framebuffer copied at 30 Hz), only 4 CPUs at boot clocks. Wi-Fi cannot be switched on: the `/arm-io/wlan` node is only there for MobileGestalt; no driver exists.
+- Touch feels slow because the system is slow, not because reports are lost (1 bad report after start).
+- Next: decide on flashing boot_b; then performance (all 8 CPUs, CPU clocks), the RTC date, the bluetoothd/fairplayd crash loops.
+
+### 2026-11-20  boot 17: M5, touch read on the INT edge
+- Image: `out/new/alioth-m5-v3-cpus4-noconsole-touch3.img` (sha256 `8492ef22...`): kernel `0d46be67...` (touch-test `6b37b90`, patch 0087 third version). Power-off from OrangeFox, cold start, `fastboot boot` at 06:14:51, lock screen, touch still dead. Log `logs/boot17-m5.txt`.
+- The TLMM edge latch works (`cfg=0xfa`): no edges until the screen was touched, then 1019 edges. The first read after an edge holds a **real touch**: `00 01 02 71 09 51 13 18` then `ff` = 1 point, down, x=625 y=2385 (the swipe up from the bottom edge); the next edge gives the same point as "contact" (`82`). But the two bytes after the 32 data bytes are `ff ff`, not the CRC (`calc=9704`), so every report was dropped (`ok=0 bad=1111`). The driver's two retries got only the `01` filler: the IC hands out each report once.
+- Next (patch 0087 fourth version, touch-test `4c2be33`): read register 0x01 once per edge; when the CRC does not match, accept the frame only if it is not filler, the point count fits, and the number of down slots equals the count. The first 20 touch changes are logged (`ALIOTH TOUCH: nocrc n=.. x=.. y=..`).
+
+### 2026-11-20  boot 16: M5, SPI probe
+- Image: `out/new/alioth-m5-v3-cpus4-noconsole-touch2.img` (sha256 `191b36ca...`): kernel `c9eee6bf...` (touch-test `157b207`, patch 0087 second version). Power-off from OrangeFox, cold start, lock screen, touch dead. Log `logs/boot16-m5.txt`.
+- Probe at dividers 4/8/16 and with SPI delays, same at every setting: `0xa3` n=1 gives `56` with a good CRC; n=4 and n=16 give `56 34 38` (one byte and its CRC) then `01` filler, so the IC ignores the length for the id register. Registers `0x00`, `0x01`, `0x02` give only `01` filler at every length. Not the clock, not the FIFO, not a frame shift.
+- OrangeFox (read-only, phone in recovery): its driver (Focaltech V3.2, same rails `pm8150a_l1` 1.8 V and `pm8150a_l10` 3.2 V, SPI mode 0, 6 MHz) reads lockdown info through the bootloader at probe, finds fw 0x1d = host 0x1d (no upgrade). Its `fts_dump_reg` shows `0x01` for power mode, LCD init code, param, vendor id, charge state, INT and ESD count: the same filler. Touch works in OrangeFox all the same (checked by tapping).
+- So `0x01` is the IC's idle filler and a report can only be read right after the INT pulse (vendor: falling-edge IRQ). The 10 ms poll misses the pulse. Next (patch 0087 third version): latch the falling edge in TLMM (`INTR_CFG` raw status, not routed to the GIC), poll `INTR_STATUS` every 1 ms, read on the edge; the SPI probe is opt-in (`sweettouchprobe=1`).
+
+### 2026-11-20  boot 15: M5, touch fix 1 (5-point reads, CRC search)
+- Image: `out/new/alioth-m5-v3-cpus4-noconsole-touch.img` (sha256 `0efa50ec...`): kernel `eed83a88...` (branch touch-test `602e7e4`, patch 0087 first version), wlan ADT. Boot 14's log pulled first (`logs/boot14-m5.txt`), then power-off and cold start. Lock screen again; touch dead. Log `logs/boot15-m5.txt`.
+- Touch init as before (chip id 56:52, fw 0x1d). Every 32-byte report read fails the CRC, and the dump shows why: all 44 received bytes are `01`, header included (`calc=b77d got=0101`). So no frame shift and not the FIFO size: the chip (or MISO) gives no data for these reads, though the 1-byte id reads are right.
+- Next (patch 0087 second version): a one-time probe after init reads 0xa3/0x02/0x01/0x00 at 1-32 bytes and SPI dividers 4/8/16 (4.8/2.4/1.2 MHz), then with CS/inter-word delays, dumps every frame and keeps a setting whose report read passes. Shows whether long reads fail on every register (transfer problem) or only report reads (chip mode), and whether a slower clock fixes it.
+
 ### 2026-11-20  boot 14: M5 with Wi-Fi/Bluetooth ADT nodes: lock screen
 - Image: `out/new/alioth-m5-v3-cpus4-noconsole-wlan.img` (sha256 `b7b74fe1...`): boot 13's image plus the `radio_nodes` ADT fix. Power-off from OrangeFox (`adb shell reboot -p`), cold start with Volume Down + Power, `fastboot boot` by `run-wlan.sh`.
 - **Result: the iOS 16 lock screen.** The wallpaper, the clock ("Wednesday, December 31", 4:03: the RTC is not read, so the clock starts at the epoch in local time), the charging battery icon, the camera button and the home indicator are all shown (`photos/boot14-m5-lockscreen.jpg`). MobileGestalt gets its Wi-Fi address, so LaunchServices seeding finishes and SpringBoard comes up.
