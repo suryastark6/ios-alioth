@@ -204,6 +204,22 @@ Problems found by reading the code and sources, and fixed before any boot:
 
 ## Boot log
 
+### 2026-11-20  boot 21: M5, GPU steps 1-10 (patch 0089)
+- Image: `out/new/alioth-m5-v3-cpus8-noconsole-gpu10.img`: kernel `e3dc47df...` (gpu-test, patch 0089), ADT with `/chosen/alioth-gpu-fw` (`--gpu-fw ../fw-gpu`, local only), `cpus=8 sweetcpufreq=1 sweetcpumhz=1800 adreno=10`. Log `logs/boot21-m5.txt`; photos `photos/boot21-*.jpg`.
+- **All ten steps done**, then the GPU block was switched off again and iOS started as before (home screen, App Library, Control Center: still software rendering, blurs white, widgets "Waiting...").
+  - 1: GCC GPU clocks as ABL left them; RPMh has `gfx.lvl` (0x30050), `cx.lvl` (0x30000), `mx.lvl` (0x30010) with their level tables.
+  - 2: qfprom speed bin `0x50` -> bin 2.
+  - 3: GPUCC readable; `cx_gdscr` and `gx_gdscr` = `0x222001` (both collapsed), GPU PLL1 off.
+  - 4: CX GDSC on (`0xf8222000`).
+  - 5: GPU memnoc/AXI clocks on, GMU clock 200 MHz, AHB, crystal and SMMU clocks on.
+  - 6: GMU registers answer; its always-on counter runs at 19198549 Hz (**the GPU block is alive**); GMU in reset (`cm3_sysreset=1`); GBIF halt_ack `0x3`.
+  - 7: GMU RSCC readable.
+  - 8: GPU SMMU (hypervisor-emulated globals): 6 stream match registers, 5 contexts, all SMRs 0.
+  - 9: context bank 0 readable, FSR 0.
+  - 10: GMU DTCM takes what is written (read back), restored.
+- 20 s alive after step 10, then the CX half switched off; no reset at any point.
+- Next: steps 11-17 (TrustZone, zap shader signature, the GMU's address space, its firmware, its start, the HFI queues, the 3D core's power).
+
 ### 2026-11-20  boot 20: M5, 8 CPUs, clocks raised (capped at 1800 MHz)
 - Image: `out/new/alioth-m5-v3-cpus8-noconsole-cpu1800.img`: kernel `6278602a...` (patch 0088), `cpus=8 sweetcpufreq=1 sweetcpumhz=1800`. Cold start; log `logs/boot20-m5.txt`.
 - Result: runs; user: faster than boot 19b. Each group ran at the row asked for:
