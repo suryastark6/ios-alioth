@@ -94,7 +94,7 @@
 +#endif /* _SYS_ALIOTH_GPU_H_ */
 --- /dev/null
 +++ b/bsd/dev/alioth_adreno.c
-@@ -0,0 +1,4191 @@
+@@ -0,0 +1,4202 @@
 +/*
 + * alioth (POCO F3 / Mi 11X, SM8250-AC "kona", Adreno 650): the GPU driver of the HakiOS Mi 10S
 + * port (github.com/Liquidation0619/hakios-thyme-mi10s, src/kernel/bsd/dev/thyme_adreno.c at
@@ -3563,8 +3563,10 @@
 +} gpu_free[1024];                       /* the addresses not in use, in order */
 +static unsigned gpu_free_count;
 +
-+static void ThymeGPUStart(void) { printf("adreno: the GPU service is not in this kernel yet\n"); }
-+static void ThymeGPUStop(void) { }
++extern void AliothGPUStart(void);     /* iokit/Kernel/arm/AliothGPU.cpp */
++extern void AliothGPUStop(void);      /* takes the clients' lock, then calls alioth_gpu_stop() */
++#define ThymeGPUStart AliothGPUStart
++#define ThymeGPUStop AliothGPUStop
 +static void gpu_block_stop(void);
 +
 +/*
@@ -4283,6 +4285,15 @@
 +	}
 +	printf("adreno: the GPU's frame copied to the panel (%u x %u of %u x %u, row %u)\n", cols, rows, width, height,
 +	    stride);
++}
++
++/* The same for the GPU service's request 0x7f (a test program's picture on the panel). */
++void alioth_panel_show(const uint8_t *pixels, uint32_t width, uint32_t height, uint32_t row_bytes);
++
++void
++alioth_panel_show(const uint8_t *pixels, uint32_t width, uint32_t height, uint32_t row_bytes)
++{
++	MiniIOMobileFramebufferShow(pixels, width, height, row_bytes);
 +}
 +
 +#endif /* ARM64_BOARD_CONFIG_SWEET */
