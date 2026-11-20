@@ -204,6 +204,12 @@ Problems found by reading the code and sources, and fixed before any boot:
 
 ## Boot log
 
+### 2026-11-20  boot 23: M5, GPU steps 1-22: panic in step 22's copy to the panel
+- Image: `out/new/alioth-m5-v3-cpus8-noconsole-gpu22.img`: kernel `e3dc47df...`, `adreno=22 adreno_watch=30`. Cold start.
+- Result: a panic on the screen (`photos/boot23-panic.jpg`), 50 s after start: `kmem_alloc(..., 10371072, 0x100021): failed with 3`. No log of this run (the persistent log had not been flushed yet; the pulled `logs/boot23-m5.txt` is boot 22's again).
+- The backtrace, symbolised against the kernel: `alioth_adreno_init` -> `step_frame` (step 22) -> `MiniIOMobileFramebufferShow` -> `ml_io_map_wcomb` -> `io_map` -> `kmem_alloc`. So **steps 18-21 passed** (core address space and microcode, zap shader loaded, command processor started, first commands) and step 22 had drawn its frame; mapping the panel's 10 MB a second time (1080 x 2400 x 4, rounded to 16K pages) ran out of I/O address space. The fault is in ios-alioth's glue, not in the GPU.
+- Fix: the copy goes through the console's existing mapping (`PE_state.video`), and is skipped with a log line if there is none.
+
 ### 2026-11-20  boot 22: M5, GPU steps 1-17: the 3D core has power
 - Image: `out/new/alioth-m5-v3-cpus8-noconsole-gpu17.img`: kernel `e3dc47df...`, ADT with the GPU firmware, `adreno=17`. Cold start; iOS came up as before. Log `logs/boot22-m5.txt`.
 - Steps 1-10 as boot 21. Then:
