@@ -204,6 +204,13 @@ Problems found by reading the code and sources, and fixed before any boot:
 
 ## Boot log
 
+### 2026-11-20  boot 26: M5, GPU kept on; backboardd not started
+- Before it, with the owner's go-ahead: `fastboot -S 512M flash userdata ios16-root-gpu.simg` (sha256 `25691002...`, 24 chunks OKAY, 490 s): the iOS root plus `/usr/local/alioth/{lib,bin}` (Mesa 25.0.7 freedreno `libOSMesa.8.dylib`, the EAGL bridge `libalioth.gl.dylib` from HakiOS `eagl.c`, the loader `libalioth.dylib`, `gl_test`, `gltest_gate`), and in `launchd.plist` backboardd with `DYLD_INSERT_LIBRARIES` and `StandardErrorPath=/dev/console`, plus a job `com.alioth.gltest`. Built with `gpu-build/` (outside the repository). The 409 OpenGLES dispatch offsets HakiOS measured on 16.5 were checked against 16.7.16's OpenGLES (extracted from the dyld cache): all the same.
+- Image: `out/new/alioth-m5-v3-cpus8-noconsole-gpukeep.img`: kernel `4f1aaee0...` (patch 0090: AliothGPU on SweetSurface, IOAcceleratorES), `sweetgpu=1`. Cold start; log `logs/boot26-m5.txt`.
+- Kernel side as planned: steps 1-21 without pauses, `THE GPU STAYS ON`, `AliothGPU: IOAcceleratorES published`.
+- **backboardd was never started**: no `exec backboardd`, no `|backboardd|` or `|SpringBoard|` lines (boot 25: 15 and 413), SpringBoard restarted again and again, the console text stayed on the panel. The change to backboardd's job did it; the likely part is `StandardErrorPath=/dev/console` (not needed: the kernel already logs its stderr).
+- Next: the root again without `StandardErrorPath` (only `DYLD_INSERT_LIBRARIES`), flash, boot 27.
+
 ### 2026-11-20  boot 25: M5, GPU steps 1-22: **a picture drawn by the Adreno 650**
 - Image: `out/new/alioth-m5-v3-cpus8-noconsole-gpu22c.img`: kernel `48179a57...` (0089 with `sweet_fbcon_pixels()`), `adreno=22 adreno_watch=30`. Cold start. Log `logs/boot25-m5.txt`; photo `photos/boot25-gpu-picture.jpg`.
 - **The GPU drew a frame and it is on the panel**: orange, white and blue bands, with the console text over the middle.
