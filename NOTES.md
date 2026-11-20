@@ -204,6 +204,22 @@ Problems found by reading the code and sources, and fixed before any boot:
 
 ## Boot log
 
+### 2026-11-20  boot 19b: M5, 8 CPUs, clock tables read
+- Image: `out/new/alioth-m5-v3-cpus8-noconsole-cpufreq-read.img`: kernel `6278602a...` (cpufreq-test, patch 0088), `cpus=8 sweetcpufreq=2`. The first try from the script was refused by fastboot (`Command failed`, the phone had only just reached fastboot), so the phone ran the flashed boot_b instead; booted again at 07:21 after `adb reboot bootloader` (warm start, the LCD stayed dark at first; iOS was seen later). Log `logs/boot19b-m5.txt`.
+- **8/8 CPUs, iOS runs; much faster than on 4 cores** (user: "far better now, fast", animations still lag: software rendering).
+- The EPSS tables (`enable=0x3` in all three groups):
+  - A55 0-3: row 13 of 17, **1516 MHz**, top 1804.
+  - A77 4-6: row 0 of 18, **710 MHz**, top 2419.
+  - A77 prime 7: row 0 of 21, **844 MHz**, top 3187.
+- So ABL leaves the big cores at their lowest clock. Boot 19 (all groups to their top row at once) reset within about a minute.
+- **Slot:** `fastboot getvar current-slot` now says `a` (it was `b`). The flashed iOS on boot_b never marks its boot successful, so every normal start of slot b used up one of ABL's A/B retries, and ABL then switched to slot a. `fastboot boot` is not affected. Switching back (`fastboot --set-active=b`) is a write and has not been done.
+- Next: raise the clocks with a cap (`sweetcpumhz=1800`), then higher.
+
+### 2026-11-20  boot 19: M5, 8 CPUs, all clocks to the top row
+- Image: `out/new/alioth-m5-v3-cpus8-noconsole-cpufreq.img` (sha256 `52b50f9d...`): kernel `6278602a...`, `cpus=8 sweetcpufreq=1`. `fastboot boot` at 07:09:29.
+- Result: back in fastboot within 60 s (a reset); booting OrangeFox right then was refused (`Command failed`), and the phone went on into the flashed iOS on boot_b with a dark LCD (warm start), whose run overwrote the log. So no log of boot 19.
+- Also from OrangeFox (read-only, `vendor_b` mounted `ro` and unmounted): the GPU firmware `a650_sqe.fw`, `a650_gmu.bin`, `a650_zap.mdt/.elf/.b00-.b02` copied to `fw-gpu/` beside the repository (not committed; the phone's own files).
+
 ### 2026-11-20  boot 18: M5, touch works
 - Image: `out/new/alioth-m5-v3-cpus4-noconsole-touch4.img` (sha256 `a4608cd3...`): kernel `7b20dc41...` (touch-test `4c2be33`, patch 0087 fourth version), wlan ADT. Power-off from OrangeFox, cold start, `fastboot boot` at 06:35:03, log `logs/boot18-m5.txt`. Build kept in `builds/boot18-touch/`.
 - **Result: touch works.** Unlocking, opening apps (Phone) and swiping all respond. The driver accepted 3475 of 3476 edge reports (none had a valid CRC; all passed the frame check), and the logged points match the gestures (swipe up from y=2397, taps around the screen, the corners at 79,33 and 1078,123).
