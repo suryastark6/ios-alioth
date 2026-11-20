@@ -204,6 +204,16 @@ Problems found by reading the code and sources, and fixed before any boot:
 
 ## Boot log
 
+### 2026-11-20  boot 20: M5, 8 CPUs, clocks raised (capped at 1800 MHz)
+- Image: `out/new/alioth-m5-v3-cpus8-noconsole-cpu1800.img`: kernel `6278602a...` (patch 0088), `cpus=8 sweetcpufreq=1 sweetcpumhz=1800`. Cold start; log `logs/boot20-m5.txt`.
+- Result: runs; user: faster than boot 19b. Each group ran at the row asked for:
+  - A55 0-3: row 13 -> 15, **1708 MHz**.
+  - A77 4-6: row 0 -> 10, **1766 MHz** (was 710).
+  - A77 prime 7: row 0 -> 8, **1747 MHz** (was 844).
+  - Loop speed on cpu 0: 379 -> 427 per us.
+- Next: higher caps later, one step at a time (boot 19, at 1804/2419/3187, reset). The GPU port comes first.
+- GPU addresses checked against alioth's device tree: chip ID `0x06050002` (Adreno 650), `kgsl-3d0@3d00000`, `gmu@3d6a000` (+0x30000), `gpucc@3d90000` (`qcom,gpucc-kona`), GDSCs `3d9100c`/`3d9106c`, `kgsl-smmu@3da0000`, `qfprom@780000`; zap region `pil_gpu_region@8681a000`. All as in the Mi 10 (UMI) profile of the HakiOS Adreno driver.
+
 ### 2026-11-20  boot 19b: M5, 8 CPUs, clock tables read
 - Image: `out/new/alioth-m5-v3-cpus8-noconsole-cpufreq-read.img`: kernel `6278602a...` (cpufreq-test, patch 0088), `cpus=8 sweetcpufreq=2`. The first try from the script was refused by fastboot (`Command failed`, the phone had only just reached fastboot), so the phone ran the flashed boot_b instead; booted again at 07:21 after `adb reboot bootloader` (warm start, the LCD stayed dark at first; iOS was seen later). Log `logs/boot19b-m5.txt`.
 - **8/8 CPUs, iOS runs; much faster than on 4 cores** (user: "far better now, fast", animations still lag: software rendering).
