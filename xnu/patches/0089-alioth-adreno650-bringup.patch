@@ -1,3 +1,27 @@
+--- a/pexpert/arm/pe_serial.c
++++ b/pexpert/arm/pe_serial.c
+@@ -750,6 +750,21 @@ fbcon_kick_soon(void)
+ 	}
+ }
+ static uint32_t fbcon_width, fbcon_height, fbcon_stride;
++
++/*
++ * The console's mapping of the panel, for alioth_adreno.c (step 22 shows the GPU's frame there):
++ * the panel's memory may not be mapped twice (boot 23: out of I/O address space), and
++ * PE_state.video holds its physical address (boot 24: a data abort at 0x9c000000).
++ */
++volatile uint32_t *sweet_fbcon_pixels(uint32_t *width, uint32_t *height, uint32_t *stride);
++volatile uint32_t *
++sweet_fbcon_pixels(uint32_t *width, uint32_t *height, uint32_t *stride)
++{
++	*width = fbcon_width;
++	*height = fbcon_height;
++	*stride = fbcon_stride;
++	return fbcon_base;
++}
+ static uint32_t fbcon_cols, fbcon_rows, fbcon_col, fbcon_row;
+ 
+ static void
 --- a/bsd/conf/files
 +++ b/bsd/conf/files
 @@ -110,6 +110,7 @@
@@ -70,7 +94,7 @@
 +#endif /* _SYS_ALIOTH_GPU_H_ */
 --- /dev/null
 +++ b/bsd/dev/alioth_adreno.c
-@@ -0,0 +1,4183 @@
+@@ -0,0 +1,4191 @@
 +/*
 + * alioth (POCO F3 / Mi 11X, SM8250-AC "kona", Adreno 650): the GPU driver of the HakiOS Mi 10S
 + * port (github.com/Liquidation0619/hakios-thyme-mi10s, src/kernel/bsd/dev/thyme_adreno.c at
@@ -4230,26 +4254,34 @@
 +
 +/*
 + * The panel's memory (ABL's splash buffer, which the display controller scans by itself, NOTES.md
-+ * boot 03) through the console's own mapping of it: mapping its 10 MB again here ran the kernel out
-+ * of I/O address space (boot 23: io_map -> kmem_alloc ... failed with 3, a panic).
++ * boot 03) through the kernel console's own mapping of it (pexpert/arm/pe_serial.c,
++ * sweet_fbcon_pixels()): mapping its 10 MB again ran the kernel out of I/O address space (boot 23,
++ * a panic in io_map), and PE_state.video holds its physical address (boot 24, a data abort at
++ * 0x9c000000).
 + */
++extern volatile uint32_t *sweet_fbcon_pixels(uint32_t *width, uint32_t *height, uint32_t *stride);
++
 +static void
 +MiniIOMobileFramebufferShow(const uint8_t *pixels, uint32_t width, uint32_t height, uint32_t row_bytes)
 +{
-+	vm_offset_t panel = (vm_offset_t)PE_state.video.v_baseAddr;
-+	uint32_t rows = (uint32_t)MIN((unsigned long)height, PE_state.video.v_height);
-+	uint32_t cols = (uint32_t)MIN((unsigned long)width, PE_state.video.v_width);
-+	unsigned long stride = PE_state.video.v_rowBytes;
++	uint32_t panel_w = 0, panel_h = 0, stride = 0;
++	volatile uint32_t *panel = sweet_fbcon_pixels(&panel_w, &panel_h, &stride);
++	uint32_t rows = MIN(height, panel_h), cols = MIN(width, panel_w);
 +
-+	if (!panel || !stride || PE_state.video.v_depth != 32) {
-+		printf("adreno: no console mapping of the panel (base %#lx, row %lu, depth %lu): the GPU's frame is not shown\n",
-+		    (unsigned long)panel, stride, PE_state.video.v_depth);
++	if (panel == NULL || stride < cols * 4u) {
++		printf("adreno: no console mapping of the panel (%u x %u, row %u): the GPU's frame is not shown\n",
++		    panel_w, panel_h, stride);
 +		return;
 +	}
 +	for (uint32_t y = 0; y < rows; y++) {
-+		memcpy((void *)(panel + (vm_offset_t)y * stride), pixels + (size_t)y * row_bytes, (size_t)cols * 4u);
++		volatile uint32_t *line = (volatile uint32_t *)((volatile uint8_t *)panel + (size_t)y * stride);
++		const uint32_t *from = (const uint32_t *)(const void *)(pixels + (size_t)y * row_bytes);
++
++		for (uint32_t x = 0; x < cols; x++) {
++			line[x] = from[x];
++		}
 +	}
-+	printf("adreno: the GPU's frame copied to the panel (%u x %u of %u x %u, row %lu)\n", cols, rows, width, height,
++	printf("adreno: the GPU's frame copied to the panel (%u x %u of %u x %u, row %u)\n", cols, rows, width, height,
 +	    stride);
 +}
 +

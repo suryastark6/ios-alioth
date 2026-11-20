@@ -204,6 +204,11 @@ Problems found by reading the code and sources, and fixed before any boot:
 
 ## Boot log
 
+### 2026-11-20  boot 24: M5, GPU steps 1-22: data abort in the panel copy
+- Image: `out/new/alioth-m5-v3-cpus8-noconsole-gpu22b.img`: kernel `552f4ede...` (0089 with the copy through `PE_state.video`), `adreno=22 adreno_watch=30`. Cold start.
+- Result: a panic again (`photos/boot24-panic.jpg`): `Kernel data abort` with `far 0x9c000000`, called from `MiniIOMobileFramebufferShow` in `step_frame`: `PE_state.video.v_baseAddr` holds the panel's **physical** address on this kernel. No log of the run (the persistent log is flushed only after the root is mounted; the GPU steps run before).
+- Fix: `pexpert/arm/pe_serial.c` gets `sweet_fbcon_pixels()`, which hands out the console's own mapping (`fbcon_base`, made early in boot), and step 22's copy uses it.
+
 ### 2026-11-20  boot 23: M5, GPU steps 1-22: panic in step 22's copy to the panel
 - Image: `out/new/alioth-m5-v3-cpus8-noconsole-gpu22.img`: kernel `e3dc47df...`, `adreno=22 adreno_watch=30`. Cold start.
 - Result: a panic on the screen (`photos/boot23-panic.jpg`), 50 s after start: `kmem_alloc(..., 10371072, 0x100021): failed with 3`. No log of this run (the persistent log had not been flushed yet; the pulled `logs/boot23-m5.txt` is boot 22's again).
