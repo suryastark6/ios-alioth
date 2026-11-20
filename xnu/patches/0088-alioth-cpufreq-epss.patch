@@ -1,0 +1,169 @@
+--- a/bsd/conf/files
++++ b/bsd/conf/files
+@@ -109,6 +109,7 @@
+ bsd/dev/sweet_keys.c			standard
+ bsd/dev/sweet_touch.c			standard
+ bsd/dev/alioth_touch.c			standard
++bsd/dev/alioth_cpufreq.c		standard
+ bsd/dev/sweet_rpmh.c			standard
+ bsd/dev/sweet_spmi.c			standard
+ bsd/dev/sweet_usb.c			standard
+--- a/bsd/dev/sweet_ufs.c
++++ b/bsd/dev/sweet_ufs.c
+@@ -589,6 +589,7 @@
+  */
+ bool sweet_board_is(const char *want);
+ void alioth_touch_init(void);
++void alioth_cpufreq_init(void);
+ 
+ bool
+ sweet_board_is(const char *want)
+@@ -714,6 +715,7 @@
+ 		 */
+ 		printf("SWEET: alioth: sweet touch and USB drivers not started\n");
+ 		alioth_touch_init();    /* FT3658U on GENI SPI (alioth_touch.c) */
++		alioth_cpufreq_init();  /* CPU clocks, EPSS (alioth_cpufreq.c) */
+ 	} else {
+ 		sweet_touch_init();
+ 		sweet_usb_probe();
+--- /dev/null
++++ b/bsd/dev/alioth_cpufreq.c
+@@ -0,0 +1,138 @@
++/*
++ * CPU clocks on the POCO F3 / Mi 11X (alioth, SM8250).
++ *
++ * ABL leaves every group of cores at a low row of its frequency table and expects the OS to ask
++ * for more. alioth's device tree (/soc/qcom,cpufreq-hw, compatible "qcom,cpufreq-hw-epss") has
++ * three groups at 0x18591000, 0x18592000 and 0x18593000: cores 0-3 (Cortex-A55), 4-6 (A77) and
++ * 7 (A77 prime), as each cpu node's qcom,freq-domain says. The hardware ("EPSS") holds a table per
++ * group and switches the clock source and the voltage by itself when told which row is wanted:
++ * one register write. Thermal limits stay with the hardware (the device tree's qcom,limits-dcvs),
++ * which caps the clock under that row by itself.
++ *
++ * Register layout from Linux drivers/cpufreq/qcom-cpufreq-hw.c (epss_soc_data); the approach
++ * from HakiOS drivers/power/hakios.cpufreq.c (github.com/oosexgang/hakios-xnu-kernel, APSL 2.0).
++ *
++ * Boot-args:
++ *   sweetcpufreq=0   (default) leave the clocks as ABL set them
++ *   sweetcpufreq=1   raise every group that has one of our cores to its top row
++ *   sweetcpufreq=2   only read and print the tables
++ *   sweetcpumhz=N    never ask for a row above N MHz (any group)
++ */
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++#include <sys/param.h>
++#include <sys/systm.h>
++#include <kern/clock.h>
++#include <kern/cpu_number.h>
++#include <kern/thread.h>
++#include <machine/machine_routines.h>
++#include <pexpert/pexpert.h>
++
++extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
++void alioth_cpufreq_init(void);
++
++#define EPSS_PA         0x18591000UL
++#define EPSS_SIZE       0x1000UL
++#define EPSS_GROUPS     3u
++#define EPSS_ENABLE     0x000u          /* bit 0: the hardware does the switching */
++#define EPSS_STATE      0x020u          /* [7:0] the multiple of 19.2 MHz running now */
++#define EPSS_LUT        0x100u          /* a word per row: [31:30] source, [7:0] multiple of 19.2 MHz */
++#define EPSS_ROWS       40u
++#define EPSS_PERF       0x320u          /* the row asked for */
++#define XO_KHZ          19200u
++#define ALT_KHZ         300000u         /* source 0: the fixed 300 MHz */
++
++static const char *const group_name[EPSS_GROUPS] = { "A55 0-3", "A77 4-6", "A77 prime 7" };
++
++static uint32_t
++rd(vm_offset_t base, uint32_t off)
++{
++	return *(volatile uint32_t *)(base + off);
++}
++
++static uint32_t
++row_khz(uint32_t entry)
++{
++	return (entry >> 30) ? XO_KHZ * (entry & 0xffu) : ALT_KHZ;
++}
++
++/* Loop iterations per microsecond on this core: shows the clock change, not an exact figure. */
++static uint32_t
++loop_speed(void)
++{
++	volatile uint64_t sink = 0;
++	uint64_t start = mach_absolute_time(), ns;
++	for (uint32_t i = 0; i < 2000000u; ++i) {
++		sink += i;
++	}
++	absolutetime_to_nanoseconds(mach_absolute_time() - start, &ns);
++	return ns ? (uint32_t)(2000000ull * 1000ull / ns) : 0;
++}
++
++static uint32_t
++group_of(uint64_t mpidr)
++{
++	uint32_t core = (uint32_t)(mpidr >> 8) & 0xffu;
++	return core < 4u ? 0u : core < 7u ? 1u : 2u;
++}
++
++static void
++group_set(uint32_t g, unsigned cores, unsigned mode, uint32_t cap_mhz)
++{
++	vm_offset_t base = ml_io_map(EPSS_PA + g * EPSS_SIZE, EPSS_SIZE);
++	if (!base) {
++		printf("ALIOTH CPUFREQ: %s: map failed\n", group_name[g]);
++		return;
++	}
++	uint32_t en = rd(base, EPSS_ENABLE), was = rd(base, EPSS_PERF), now = rd(base, EPSS_STATE) & 0xffu;
++	uint32_t top = 0, top_khz = 0, rows = 0;
++	char line[EPSS_ROWS * 6 + 1];
++	unsigned k = 0;
++	for (uint32_t r = 0; r < EPSS_ROWS; ++r) {
++		uint32_t khz = row_khz(rd(base, EPSS_LUT + 4u * r));
++		if (r && khz <= top_khz) {
++			break;          /* the table ends by repeating its last row */
++		}
++		rows = r + 1;
++		k += (unsigned)snprintf(line + k, sizeof(line) - k, " %u", khz / 1000u);
++		if (!cap_mhz || khz <= cap_mhz * 1000u) {
++			top = r;
++		}
++		top_khz = khz;
++	}
++	printf("ALIOTH CPUFREQ: %s (%u of our cores): enable=%#x row=%u now=%u MHz, %u rows, MHz:%s\n",
++	    group_name[g], cores, en, was, now * XO_KHZ / 1000u, rows, line);
++	if (mode != 1 || !(en & 1u) || !rows) {
++		return;
++	}
++	*(volatile uint32_t *)(base + EPSS_PERF) = top;
++	delay_for_interval(20, NSEC_PER_MSEC);
++	printf("ALIOTH CPUFREQ: %s: row %u -> %u (%u MHz asked), running %u MHz\n", group_name[g], was, top,
++	    row_khz(rd(base, EPSS_LUT + 4u * top)) / 1000u, (rd(base, EPSS_STATE) & 0xffu) * XO_KHZ / 1000u);
++}
++
++void
++alioth_cpufreq_init(void)
++{
++	unsigned mode = 0;
++	uint32_t cap_mhz = 0;
++	(void)PE_parse_boot_argn("sweetcpufreq", &mode, sizeof(mode));
++	(void)PE_parse_boot_argn("sweetcpumhz", &cap_mhz, sizeof(cap_mhz));
++	if (!mode) {
++		printf("ALIOTH CPUFREQ: clocks left as ABL set them (sweetcpufreq=0)\n");
++		return;
++	}
++	const ml_topology_info_t *topo = ml_get_topology_info();
++	unsigned cores[EPSS_GROUPS] = { 0 };
++	for (unsigned i = 0; topo && i < topo->num_cpus; ++i) {
++		++cores[group_of(topo->cpus[i].phys_id)];
++	}
++	uint32_t before = loop_speed();
++	for (uint32_t g = 0; g < EPSS_GROUPS; ++g) {
++		if (cores[g] || mode == 2) {
++			group_set(g, cores[g], mode, cap_mhz);
++		}
++	}
++	printf("ALIOTH CPUFREQ: loop on cpu %u: %u -> %u per us\n", cpu_number(), before, loop_speed());
++}
++
++#endif /* ARM64_BOARD_CONFIG_SWEET */
