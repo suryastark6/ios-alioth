@@ -36,7 +36,9 @@ Hardware facts with sources: [docs/ALIOTH-HARDWARE.md](docs/ALIOTH-HARDWARE.md).
 - `tools/build-alioth.sh m1|m3|m5 [KERNEL]`: one command per milestone test image, boot header v3 (default) or v2.
 - `xnu/patches/0085`: when the panel's autorefresh does not start, XNU sends the frames itself (`sweetkick=`, passed by the shim).
 - `xnu/patches/0086`: FocalTech FT3658U touch driver over GENI SPI, with RPMh votes for its two rails.
-- `xnu/patches/0087`: touch report reads that fit the SPI FIFO (`sweettouchpts`, default 5 fingers), CRC frame search and a dump of bad frames, `sweettouchcrc=0` to skip the check.
+- `xnu/patches/0087`: touch report reads that fit the SPI FIFO (`sweettouchpts`, default 5 fingers), one read per INT edge (latched in TLMM), frames checked by CRC or, failing that, by their content; touch works (boot 18).
+- `xnu/patches/0088`: CPU clocks through EPSS (`sweetcpufreq=1`, `sweetcpumhz=N` cap; `=2` prints the tables).
+- `xnu/patches/0089`: Adreno 650 bring-up, step by step (`adreno=N`; `sweetgpu=1` to start and keep it), ported from HakiOS. Needs the phone's own `a650_*` firmware in the ADT (`tools/build-alioth-win.py --gpu-fw DIR`).
 - Kernel builds: every successful CI run publishes the kernel to the `kernel` branch, so it can be fetched without a GitHub login.
 - `xnu/patches/0084`: on alioth, sweet's touch driver (which would power sweet's touch rail, a different regulator here) and USB driver (sweet's PHY) stay off; `userdata` is found on any UFS LUN.
 
@@ -79,6 +81,7 @@ Results from real phones are the most useful contribution. Please include your v
 ## Credits
 
 - [ios-sweet](https://github.com/dipa-studio/ios-sweet) by dipa-studio and contributors: the kernel port, shim, drivers and tooling this project is built on (MIT).
+- [HakiOS](https://github.com/oosexgang/hakios-xnu-kernel) and its [Mi 10S port](https://github.com/Liquidation0619/hakios-thyme-mi10s): the Adreno 650 driver of patch 0089 and the CPU clock approach of 0088 (kernel parts APSL 2.0).
 - Apple's open-source releases (xnu, IOHIDFamily, libpthread, hfs), [BearSSL](https://bearssl.org), [blacktop/darwin-xnu-build](https://github.com/blacktop/darwin-xnu-build), [ipsw](https://github.com/blacktop/ipsw).
 - The [postmarketOS alioth notes](https://wiki.postmarketos.org/wiki/Xiaomi_POCO_F3_/_Redmi_K40_/_Mi_11X_(xiaomi-alioth)) and Xiaomi's published kernel sources for hardware details.
 

@@ -263,6 +263,16 @@ def build(seed=None, qemu=False, highmem=False, board='sweet'):
 if __name__ == '__main__':
     board = sys.argv[sys.argv.index('--board') + 1] if '--board' in sys.argv else 'sweet'
     root = build(qemu='--qemu' in sys.argv, highmem='--highmem' in sys.argv, board=board)
+    if '--gpu-fw' in sys.argv:
+        # The phone's own GPU firmware (/vendor/firmware/a650_*), for bsd/dev/alioth_adreno.c:
+        # /chosen/alioth-gpu-fw, one property per file. Never committed: built locally only.
+        fw_dir = sys.argv[sys.argv.index('--gpu-fw') + 1]
+        names = ['a650_gmu.bin', 'a650_sqe.fw', 'a650_zap.mdt', 'a650_zap.b00', 'a650_zap.b01', 'a650_zap.b02']
+        missing = [n for n in names if not os.path.isfile(os.path.join(fw_dir, n))]
+        if missing:
+            raise SystemExit(f'--gpu-fw {fw_dir}: missing {", ".join(missing)}')
+        chosen = next(c for c in root.children if dict((k, v) for k, _, v in c.props)['name'] == cstr('chosen'))
+        chosen.children.append(node('alioth-gpu-fw', [(n, open(os.path.join(fw_dir, n), 'rb').read()) for n in names]))
     blob = adt.serialize(root)
     open(sys.argv[1], 'wb').write(blob)
     if '--dump' in sys.argv:

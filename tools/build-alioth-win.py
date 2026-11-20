@@ -75,6 +75,7 @@ def main():
     ap.add_argument('--cpus', type=int, default=1, choices=range(1, 9))
     ap.add_argument('--extra', default='', help='more boot-args, e.g. "sweetsample=lsd,SpringBoard"')
     ap.add_argument('--tag', default='', help='suffix for the image name')
+    ap.add_argument('--gpu-fw', default='', help='folder with the phone's a650_* GPU firmware, put into the ADT')
     ap.add_argument('--noconsole', action='store_true',
                     help='sweetfb_noconsole=1: no kernel text over the iOS GUI (panics are still drawn)')
     ap.add_argument('--toolchain', default=os.path.join(ROOT, '..', 'toolchain', 'bin'),
@@ -121,7 +122,8 @@ def main():
     ramdisk = os.path.join(out, 'ramdisk.bin')
     if kernel_ms:
         adt = os.path.join(out, 'alioth.adt')
-        run([sys.executable, os.path.join(HERE, 'mkadt.py'), adt, '--board', 'alioth', '--highmem'])
+        run([sys.executable, os.path.join(HERE, 'mkadt.py'), adt, '--board', 'alioth', '--highmem'] +
+            (['--gpu-fw', a.gpu_fw] if a.gpu_fw else []))
         run([sys.executable, os.path.join(HERE, 'mkpayload.py'), a.kernel, adt, ramdisk,
              '--cmdline', args])
     else:
