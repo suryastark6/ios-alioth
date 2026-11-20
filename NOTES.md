@@ -204,6 +204,13 @@ Problems found by reading the code and sources, and fixed before any boot:
 
 ## Boot log
 
+### 2026-11-20  boot 27: M5, GPU kept on; backboardd runs, the loader is not loaded
+- Before it, with the owner's go-ahead: `userdata` flashed again with the root rebuilt without `StandardErrorPath` (`ios16-root-gpu.simg` sha256 `4c54a656...`, all OKAY, 505 s). Fastboot stopped answering afterwards (as on 19 Nov); Power + Volume Down, OrangeFox, power-off, cold start.
+- Image: as boot 26 (`gpukeep`, kernel `4f1aaee0...`, `sweetgpu=1`). Log `logs/boot27-m5.txt` (pulled by hand: recovery came up after the script's wait).
+- backboardd started (`exec backboardd`, 15 `|backboardd|` lines, as boot 25), iOS reached the home screen, still drawn in software (user: no wallpaper, no blur, laggy).
+- **No `alioth:` line**: the loader was never loaded. dyld honours `DYLD_INSERT_LIBRARIES` only when AMFI allows it (`__mac_syscall("AMFI", 0x5a)`); our policy is called "SWEET AMFI", so the call fails with ENOPOLICY and dyld refuses all `DYLD_*` variables.
+- Fix (patch 0091): a policy named "AMFI" answering 0x5a (all allowed) and 0x60 (not enforcing), as HakiOS `kern_minimac.c`. Kernel only; the root stays as flashed.
+
 ### 2026-11-20  boot 26: M5, GPU kept on; backboardd not started
 - Before it, with the owner's go-ahead: `fastboot -S 512M flash userdata ios16-root-gpu.simg` (sha256 `25691002...`, 24 chunks OKAY, 490 s): the iOS root plus `/usr/local/alioth/{lib,bin}` (Mesa 25.0.7 freedreno `libOSMesa.8.dylib`, the EAGL bridge `libalioth.gl.dylib` from HakiOS `eagl.c`, the loader `libalioth.dylib`, `gl_test`, `gltest_gate`), and in `launchd.plist` backboardd with `DYLD_INSERT_LIBRARIES` and `StandardErrorPath=/dev/console`, plus a job `com.alioth.gltest`. Built with `gpu-build/` (outside the repository). The 409 OpenGLES dispatch offsets HakiOS measured on 16.5 were checked against 16.7.16's OpenGLES (extracted from the dyld cache): all the same.
 - Image: `out/new/alioth-m5-v3-cpus8-noconsole-gpukeep.img`: kernel `4f1aaee0...` (patch 0090: AliothGPU on SweetSurface, IOAcceleratorES), `sweetgpu=1`. Cold start; log `logs/boot26-m5.txt`.
