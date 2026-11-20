@@ -204,6 +204,17 @@ Problems found by reading the code and sources, and fixed before any boot:
 
 ## Boot log
 
+### 2026-11-20  boot 25: M5, GPU steps 1-22: **a picture drawn by the Adreno 650**
+- Image: `out/new/alioth-m5-v3-cpus8-noconsole-gpu22c.img`: kernel `48179a57...` (0089 with `sweet_fbcon_pixels()`), `adreno=22 adreno_watch=30`. Cold start. Log `logs/boot25-m5.txt`; photo `photos/boot25-gpu-picture.jpg`.
+- **The GPU drew a frame and it is on the panel**: orange, white and blue bands, with the console text over the middle.
+  - 18: `a650_sqe.fw` (31632 bytes); the core's ring at GPU address 0x1000000, SQE at 0x1100000, scratch at 0x1200000; SMMU context 0 for stream 0 with our tables.
+  - 19: TrustZone gave up any earlier zap shader, then took the header, the memory (`0x8681a000`) and the image: **authenticated and started the zap shader**.
+  - 20: core registers written, CP started, `CP_ME_INIT` done (ring read 9): **the 3D core takes commands**.
+  - 21: out of secure mode, then a write of `0x600dc0de` into our page: **the 3D core writes our memory on command**.
+  - 22: 10 MB target at GPU address 0x10000000; three bands filled (ring read 123), caches flushed (`0xc0c0c0c`, `0xd0e0d0e`), first pixel `00 80 ff ff` as told; copied to the panel through the console mapping (1080 x 2400, row 4320).
+- Then the core stopped (status 0x1, ring 123 of 123), the bus halted and released, GMU "slumber", GX and CX off; iOS started as before.
+- Next: keep the GPU on for the system (the HakiOS GPU service, `ThymeGPU.cpp`, ported onto our IOSurface code, as `IOAcceleratorES`), then the userland side (Mesa freedreno behind EAGLContext in backboardd).
+
 ### 2026-11-20  boot 24: M5, GPU steps 1-22: data abort in the panel copy
 - Image: `out/new/alioth-m5-v3-cpus8-noconsole-gpu22b.img`: kernel `552f4ede...` (0089 with the copy through `PE_state.video`), `adreno=22 adreno_watch=30`. Cold start.
 - Result: a panic again (`photos/boot24-panic.jpg`): `Kernel data abort` with `far 0x9c000000`, called from `MiniIOMobileFramebufferShow` in `step_frame`: `PE_state.video.v_baseAddr` holds the panel's **physical** address on this kernel. No log of the run (the persistent log is flushed only after the root is mounted; the GPU steps run before).
