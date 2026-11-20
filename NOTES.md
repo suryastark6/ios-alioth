@@ -204,6 +204,19 @@ Problems found by reading the code and sources, and fixed before any boot:
 
 ## Boot log
 
+### 2026-11-20  boot 22: M5, GPU steps 1-17: the 3D core has power
+- Image: `out/new/alioth-m5-v3-cpus8-noconsole-gpu17.img`: kernel `e3dc47df...`, ADT with the GPU firmware, `adreno=17`. Cold start; iOS came up as before. Log `logs/boot22-m5.txt`.
+- Steps 1-10 as boot 21. Then:
+  - 11: TrustZone answers SMC calls from this kernel (`is available` 1, the PAS calls 1); its "supported" list is empty for every image, which tells nothing.
+  - 12: `a650_zap.mdt` (6860 bytes from the ADT, 3 segments) handed to TrustZone, image 13: **TrustZone accepts the zap shader's signature from this kernel**.
+  - 13: `a650_gmu.bin` (41548 bytes); GMU memory 0x4000-0xbfff, 0x144000-0x15ffff, 0x60000000-0x60009fff in our RAM (0x1842xxxxx); SMMU context for stream 5 (mask 0x400) with our page tables; RSCC and PDC prepared.
+  - 14: GMU firmware loaded: core `0x20010008`, power `0x20010008`, HFI `0x20000001`.
+  - 15: GMU out of reset, `cm3_fw_init_result=0x100`: **the GMU's firmware runs**.
+  - 16: PDC enabled, HFI queues up (`hfi_version_info 0x20000001`).
+  - 17: speed table (305, 400, 441.6, 525, 587 MHz with rail votes), bus votes (SH0 0x50004, MC0 0x50000, ACV 0x5007c, CN0 0x50074), "start", 587 MHz granted; GX GDSC on (`0xf8222800`); `rbbm_status=0x1`: **the 3D core has power and answers**.
+- 20 s alive, then the GMU accepted "slumber", GX and CX off. No reset.
+- Next: steps 18-22 (the core's address space and microcode `a650_sqe.fw`, zap shader load, core start, first commands, a three-colour frame drawn by the GPU and copied to the panel).
+
 ### 2026-11-20  boot 21: M5, GPU steps 1-10 (patch 0089)
 - Image: `out/new/alioth-m5-v3-cpus8-noconsole-gpu10.img`: kernel `e3dc47df...` (gpu-test, patch 0089), ADT with `/chosen/alioth-gpu-fw` (`--gpu-fw ../fw-gpu`, local only), `cpus=8 sweetcpufreq=1 sweetcpumhz=1800 adreno=10`. Log `logs/boot21-m5.txt`; photos `photos/boot21-*.jpg`.
 - **All ten steps done**, then the GPU block was switched off again and iOS started as before (home screen, App Library, Control Center: still software rendering, blurs white, widgets "Waiting...").
