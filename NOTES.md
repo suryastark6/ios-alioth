@@ -204,6 +204,12 @@ Problems found by reading the code and sources, and fixed before any boot:
 
 ## Boot log
 
+### 2026-11-20  boot 28: M5, AMFI answers dyld; the job's DYLD variable never arrives
+- Image: `out/new/alioth-m5-v3-cpus8-noconsole-gpukeep2.img`: kernel `83678b9d...` (patch 0091), `sweetgpu=1`. Log `logs/boot28-m5.txt` (pulled by hand again).
+- `Security policy loaded: SWEET AMFI questions (dyld policy, boot-arg state) (AMFI)`; the GPU stayed on; backboardd ran (16 lines, only the usual objc warnings); still no `alioth:` line and no dyld message about an inserted library. User: no change on screen.
+- Reason, from HakiOS's own kernel patch: launchd does not pass `DYLD_*` variables from a job description at all; HakiOS has the kernel add the variable at exec (`exec_inject_env`).
+- Fix (patch 0092): `exec_extract_strings` adds `DYLD_INSERT_LIBRARIES=/usr/local/alioth/lib/libalioth.dylib` to backboardd's environment when `sweetgpu=1` (`sweetgl=0/1` overrides), and logs `exec backboardd: DYLD_INSERT_LIBRARIES=...`. Kernel only.
+
 ### 2026-11-20  boot 27: M5, GPU kept on; backboardd runs, the loader is not loaded
 - Before it, with the owner's go-ahead: `userdata` flashed again with the root rebuilt without `StandardErrorPath` (`ios16-root-gpu.simg` sha256 `4c54a656...`, all OKAY, 505 s). Fastboot stopped answering afterwards (as on 19 Nov); Power + Volume Down, OrangeFox, power-off, cold start.
 - Image: as boot 26 (`gpukeep`, kernel `4f1aaee0...`, `sweetgpu=1`). Log `logs/boot27-m5.txt` (pulled by hand: recovery came up after the script's wait).
