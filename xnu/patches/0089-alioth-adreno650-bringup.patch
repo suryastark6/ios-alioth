@@ -70,7 +70,7 @@
 +#endif /* _SYS_ALIOTH_GPU_H_ */
 --- /dev/null
 +++ b/bsd/dev/alioth_adreno.c
-@@ -0,0 +1,4178 @@
+@@ -0,0 +1,4183 @@
 +/*
 + * alioth (POCO F3 / Mi 11X, SM8250-AC "kona", Adreno 650): the GPU driver of the HakiOS Mi 10S
 + * port (github.com/Liquidation0619/hakios-thyme-mi10s, src/kernel/bsd/dev/thyme_adreno.c at
@@ -4228,24 +4228,29 @@
 +	return (const uint8_t *)data;
 +}
 +
-+/* ABL's splash buffer, which the display controller scans by itself (NOTES.md, boot 03). */
-+#define ALIOTH_PANEL_PA         0x9c000000ull
-+#define ALIOTH_PANEL_ROW        4320u
-+
++/*
++ * The panel's memory (ABL's splash buffer, which the display controller scans by itself, NOTES.md
++ * boot 03) through the console's own mapping of it: mapping its 10 MB again here ran the kernel out
++ * of I/O address space (boot 23: io_map -> kmem_alloc ... failed with 3, a panic).
++ */
 +static void
 +MiniIOMobileFramebufferShow(const uint8_t *pixels, uint32_t width, uint32_t height, uint32_t row_bytes)
 +{
-+	vm_offset_t panel = ml_io_map_wcomb(ALIOTH_PANEL_PA, (vm_size_t)ALIOTH_PANEL_ROW * TARGET_HEIGHT);
++	vm_offset_t panel = (vm_offset_t)PE_state.video.v_baseAddr;
++	uint32_t rows = (uint32_t)MIN((unsigned long)height, PE_state.video.v_height);
++	uint32_t cols = (uint32_t)MIN((unsigned long)width, PE_state.video.v_width);
++	unsigned long stride = PE_state.video.v_rowBytes;
 +
-+	if (!panel) {
-+		printf("adreno: the panel's memory could not be mapped\n");
++	if (!panel || !stride || PE_state.video.v_depth != 32) {
++		printf("adreno: no console mapping of the panel (base %#lx, row %lu, depth %lu): the GPU's frame is not shown\n",
++		    (unsigned long)panel, stride, PE_state.video.v_depth);
 +		return;
 +	}
-+	for (uint32_t y = 0; y < height && y < TARGET_HEIGHT; y++) {
-+		memcpy((void *)(panel + (vm_offset_t)y * ALIOTH_PANEL_ROW), pixels + (size_t)y * row_bytes,
-+		    MIN(width, TARGET_WIDTH) * 4u);
++	for (uint32_t y = 0; y < rows; y++) {
++		memcpy((void *)(panel + (vm_offset_t)y * stride), pixels + (size_t)y * row_bytes, (size_t)cols * 4u);
 +	}
-+	printf("adreno: the GPU's frame copied to the panel (%u x %u)\n", width, height);
++	printf("adreno: the GPU's frame copied to the panel (%u x %u of %u x %u, row %lu)\n", cols, rows, width, height,
++	    stride);
 +}
 +
 +#endif /* ARM64_BOARD_CONFIG_SWEET */
