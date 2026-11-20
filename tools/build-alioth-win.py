@@ -75,7 +75,7 @@ def main():
     ap.add_argument('--cpus', type=int, default=1, choices=range(1, 9))
     ap.add_argument('--extra', default='', help='more boot-args, e.g. "sweetsample=lsd,SpringBoard"')
     ap.add_argument('--tag', default='', help='suffix for the image name')
-    ap.add_argument('--gpu-fw', default='', help='folder with the phone's a650_* GPU firmware, put into the ADT')
+    ap.add_argument('--gpu-fw', default='', help='folder with the phone own a650_* GPU firmware, put into the ADT')
     ap.add_argument('--noconsole', action='store_true',
                     help='sweetfb_noconsole=1: no kernel text over the iOS GUI (panics are still drawn)')
     ap.add_argument('--toolchain', default=os.path.join(ROOT, '..', 'toolchain', 'bin'),
