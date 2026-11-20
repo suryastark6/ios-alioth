@@ -209,7 +209,8 @@ Problems found by reading the code and sources, and fixed before any boot:
 - **Result: touch works.** Unlocking, opening apps (Phone) and swiping all respond. The driver accepted 3475 of 3476 edge reports (none had a valid CRC; all passed the frame check), and the logged points match the gestures (swipe up from y=2397, taps around the screen, the corners at 79,33 and 1078,123).
 - Everything is slow: animations stutter, rendering glitches, the wallpaper is black, widgets stay on "waiting", apps take a long time to open and the Phone app shows a blank screen. Expected for now: no GPU (all drawing in software, framebuffer copied at 30 Hz), only 4 CPUs at boot clocks. Wi-Fi cannot be switched on: the `/arm-io/wlan` node is only there for MobileGestalt; no driver exists.
 - Touch feels slow because the system is slow, not because reports are lost (1 bad report after start).
-- Next: decide on flashing boot_b; then performance (all 8 CPUs, CPU clocks), the RTC date, the bluetoothd/fairplayd crash loops.
+- **Flashed** (user's go-ahead): `fastboot flash boot_b out/new/alioth-m5-v3-cpus4-noconsole-touch4.img` (slot `_b` active, `boot_b` 0xC000000 bytes, image 16416 KB). The phone now starts iOS on a normal power-on. Android's boot image is in `backup/boot_b.img` (sha256 `12dea4d8...`); restore with `fastboot flash boot_b backup/boot_b.img`. OrangeFox still by `fastboot boot`. A warm reset still leaves the LCD dark: power off fully, then Power.
+- Next: performance (all 8 CPUs, CPU clocks), the RTC date, the bluetoothd/fairplayd crash loops.
 
 ### 2026-11-20  boot 17: M5, touch read on the INT edge
 - Image: `out/new/alioth-m5-v3-cpus4-noconsole-touch3.img` (sha256 `8492ef22...`): kernel `0d46be67...` (touch-test `6b37b90`, patch 0087 third version). Power-off from OrangeFox, cold start, `fastboot boot` at 06:14:51, lock screen, touch still dead. Log `logs/boot17-m5.txt`.
